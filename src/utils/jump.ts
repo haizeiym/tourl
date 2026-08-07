@@ -1,8 +1,29 @@
 import type { JumpConfigFile, JumpItem, OpenMode } from '../types/jump'
 
+/** 非 HTTPS 页面无 crypto.randomUUID，需兜底 */
+export function createId(): string {
+  const c = globalThis.crypto
+  if (c && typeof c.randomUUID === 'function') {
+    try {
+      return c.randomUUID()
+    } catch {
+      /* insecure context */
+    }
+  }
+  if (c && typeof c.getRandomValues === 'function') {
+    const buf = new Uint8Array(16)
+    c.getRandomValues(buf)
+    buf[6] = (buf[6]! & 0x0f) | 0x40
+    buf[8] = (buf[8]! & 0x3f) | 0x80
+    const hex = [...buf].map((b) => b.toString(16).padStart(2, '0')).join('')
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+  }
+  return `id-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`
+}
+
 export function createJumpItem(): JumpItem {
   return {
-    id: crypto.randomUUID(),
+    id: createId(),
     openMode: 'tab',
     name: '未命名跳转',
     iconUrl: '',
@@ -36,7 +57,7 @@ export function createJumpItemFromUrl(raw: string): JumpItem {
   const base = `${parsed.origin}${parsed.pathname}${parsed.hash}`
 
   return {
-    id: crypto.randomUUID(),
+    id: createId(),
     openMode: 'tab',
     name: name.slice(0, 64) || '未命名跳转',
     iconUrl: '',

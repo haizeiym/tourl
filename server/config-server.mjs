@@ -126,13 +126,13 @@ const server = http.createServer(async (req, res) => {
       return
     }
 
-    if (url.pathname === '/api/config' && method === 'GET') {
+    if ((url.pathname === '/api/config' || url.pathname === '/api/config.php' || url.pathname === '/config.php') && method === 'GET') {
       const config = await readConfig()
       sendJson(res, 200, config)
       return
     }
 
-    if (url.pathname === '/api/config' && method === 'PUT') {
+    if ((url.pathname === '/api/config' || url.pathname === '/api/config.php' || url.pathname === '/config.php') && method === 'PUT') {
       const body = await readBody(req)
       if (!body || typeof body !== 'object' || !Array.isArray(body.items)) {
         sendJson(res, 400, { error: 'body 须包含 items 数组' })

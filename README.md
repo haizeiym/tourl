@@ -1,35 +1,32 @@
 # URL 跳转工具
 
-基于 Vue 3 + Vite + TypeScript + Element Plus + Tailwind CSS。  
-支持**全局可写配置**（多人读写同一份 JSON，乐观锁冲突检测）。
+Vue 3 + Vite + Element Plus。
 
-## 开发
+## 一步部署（纯静态 nginx，无需 PHP / Node）
 
 ```bash
 npm install
+npm run build
+```
+
+上传 **整个 `dist/`** 到网站根目录。
+
+### 为什么以前会 404？
+
+你的主机是 **nginx 静态站**，不会执行 PHP（`config.php` 被当成文件下载），也没有 Node。  
+因此 `/api/config`、`config.php` 都不能用。
+
+### 现在怎么多人读写？
+
+1. 打开页面：自动读 `/data/jump-config.json`（静态文件，已可用）
+2. 第一次点「保存到全局」：浏览器会创建云端配置，并下载 `cloud-url.txt`
+3. 把 `cloud-url.txt` **上传到** 网站 `data/cloud-url.txt`（只做一次）
+4. 之后所有人打开站点即可共同读写同一份配置
+
+## 本地开发
+
+```bash
 npm run dev
 ```
 
-会同时启动：
-
-- 配置 API：`http://127.0.0.1:8787`（数据文件 `data/jump-config.json`）
-- 前端：Vite（`/api` 代理到上述服务）
-
-## 生产
-
-```bash
-npm run build
-npm start
-```
-
-同一端口提供静态页面 + `/api/config`。
-
-## 协作说明
-
-| 操作 | 说明 |
-|------|------|
-| 启动 / 刷新全局 | `GET /api/config`（`no-store`），拿到最新配置 |
-| 保存到全局 | `PUT /api/config`；`updatedAt` 不一致返回 409，可强制覆盖 |
-| 导入 / 导出 | 仅本地备份；导入后需再点「保存到全局」才同步给他人 |
-
-需求说明见 `prompt.md`。
+需求见 `prompt.md`。

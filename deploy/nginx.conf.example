@@ -1,0 +1,31 @@
+server {
+    listen 80;
+    server_name bot.ht666.xyz;
+
+    # 前端静态（npm run build 产物）
+    root /var/www/jumpl/dist;
+    index index.html;
+
+    # 全局配置 API → Node（推荐）
+    # 先在服务器: cd /var/www/jumpl && SERVE_STATIC=0 PORT=8787 node server/config-server.mjs
+    location /api/ {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # 禁止缓存配置接口
+        add_header Cache-Control "no-store" always;
+    }
+
+    # 若不用 Node、改用 PHP，改为下面这段并注释掉上面的 /api/：
+    # location = /api/config {
+    #     include fastcgi_params;
+    #     fastcgi_param SCRIPT_FILENAME $document_root/api/config.php;
+    #     fastcgi_pass unix:/run/php/php-fpm.sock;
+    # }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

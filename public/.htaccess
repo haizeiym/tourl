@@ -1,0 +1,5 @@
+RewriteEngine On
+
+# /api/config -> config.php（Apache）
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^api/config$ api/config.php [QSA,L]

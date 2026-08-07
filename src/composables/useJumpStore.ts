@@ -91,10 +91,18 @@ export function useJumpStore() {
   async function saveToGlobal(force = false) {
     saving.value = true
     try {
-      const saved = await saveGlobalConfig(config.value, force)
-      config.value = saved
+      const result = await saveGlobalConfig(config.value, force)
+      config.value = result.config
       dirty.value = false
-      ElMessage.success('已保存到全局配置')
+      if (result.needUploadCloudUrl) {
+        await ElMessageBox.alert(
+          '已创建云端配置并下载 cloud-url.txt。\n请把该文件上传到网站的 data/cloud-url.txt（仅需一次），之后所有人打开页面即可多人同步。\n本机已可立即使用。',
+          '首次启用云端协作',
+          { confirmButtonText: '知道了', type: 'success' },
+        )
+      } else {
+        ElMessage.success('已保存到全局配置')
+      }
     } catch (err) {
       console.error('[saveToGlobal]', err)
       if (err instanceof ConfigConflictError) {
@@ -137,11 +145,16 @@ export function useJumpStore() {
   }
 
   function addJump() {
-    const item = createJumpItem()
-    config.value.items.push(item)
-    selectedId.value = item.id
-    markDirty()
-    focusNameToken.value += 1
+    try {
+      const item = createJumpItem()
+      config.value.items.push(item)
+      selectedId.value = item.id
+      markDirty()
+      focusNameToken.value += 1
+    } catch (err) {
+      console.error('[addJump]', err)
+      ElMessage.error(err instanceof Error ? err.message : '新建跳转失败')
+    }
   }
 
   async function addJumpFromUrl() {
