@@ -51,18 +51,32 @@ async function fetchJson(url: string): Promise<unknown | null> {
   }
 }
 
-/** 解析可写云端地址：站点文件 > localStorage */
+function parseCloudUrlFile(text: string): string | null {
+  const line = text
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l && !l.startsWith('#') && /^https?:\/\//i.test(l))
+  return line ?? null
+}
+
+/**
+ * 全员必须同一地址：以站点 data/cloud-url.txt 为准（覆盖本机 localStorage，避免每人一份）
+ */
 export async function resolveCloudUrl(): Promise<string | null> {
   const fromFile = await fetchText('/data/cloud-url.txt')
-  if (fromFile && /^https?:\/\//i.test(fromFile.split('\n')[0]!.trim())) {
-    const url = fromFile.split('\n')[0]!.trim()
-    try {
-      localStorage.setItem(LS_CLOUD, url)
-    } catch {
-      /* ignore */
+  if (fromFile) {
+    const url = parseCloudUrlFile(fromFile)
+    if (url) {
+      try {
+        localStorage.setItem(LS_CLOUD, url)
+      } catch {
+        /* ignore */
+      }
+      return url
     }
-    return url
   }
+
+  // 仅当站点尚未部署 cloud-url 时，才用本机缓存（并提示不一致风险由保存/构建修复）
   try {
     const fromLs = localStorage.getItem(LS_CLOUD)
     if (fromLs && /^https?:\/\//i.test(fromLs)) return fromLs
@@ -72,65 +86,28 @@ export async function resolveCloudUrl(): Promise<string | null> {
   return null
 }
 
-function rememberCloudUrl(url: string) {
-  try {
-    localStorage.setItem(LS_CLOUD, url)
-  } catch {
-    /* ignore */
-  }
-}
-
-/** 供 UI 触发：下载 cloud-url.txt 方便上传到服务器 data/ */
-export function downloadCloudUrlFile(url: string) {
-  const blob = new Blob([`${url}\n`], { type: 'text/plain;charset=utf-8' })
-  const href = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = href
-  a.download = 'cloud-url.txt'
-  a.click()
-  URL.revokeObjectURL(href)
-}
-
-async function createCloudStore(seed: JumpConfigFile): Promise<string> {
-  const res = await fetch('https://jsonblob.com/api/jsonBlob', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    body: JSON.stringify(seed),
-  })
-  if (!res.ok) {
-    throw new Error(`创建云端配置失败 (${res.status})`)
-  }
-  const loc = res.headers.get('Location') || res.headers.get('location')
-  if (!loc) throw new Error('创建云端配置失败：无 Location')
-  return loc.startsWith('http') ? loc : `https://jsonblob.com${loc}`
-}
-
-/** 拉取全局配置 */
+/** 拉取全局配置：有云端则只读云端，保证全员一致 */
 export async function fetchGlobalConfig(): Promise<JumpConfigFile> {
-  // 1) 开发环境本地 API
   if (import.meta.env.DEV) {
     const raw = await fetchJson('/api/config')
     if (raw) return parseJumpConfig(raw)
   }
 
-  // 2) 云端（多人可写）
   const cloud = await resolveCloudUrl()
   if (cloud) {
     const raw = await fetchJson(cloud)
     if (raw) return parseJumpConfig(raw)
+    throw new Error('云端配置读取失败，请检查网络或重新打包部署')
   }
 
-  // 3) 站点静态 JSON（你当前 nginx 已可访问）
+  // 无云端地址时退回静态文件（只读，且全员应相同）
   const local = await fetchJson('/data/jump-config.json')
   if (local) return parseJumpConfig(local)
 
   const root = await fetchJson('/jump-config.json')
   if (root) return parseJumpConfig(root)
 
-  throw new Error('无法加载配置：请确认已上传 data/jump-config.json')
+  throw new Error('无法加载配置：请重新执行 npm run build 并上传完整 dist')
 }
 
 export class ConfigConflictError extends Error {
@@ -145,8 +122,6 @@ export class ConfigConflictError extends Error {
 
 export type SaveGlobalResult = {
   config: JumpConfigFile
-  /** 首次创建云端时为 true，需提示上传 cloud-url.txt */
-  needUploadCloudUrl?: string
 }
 
 async function putToCloud(
@@ -185,7 +160,7 @@ async function putToCloud(
   return next
 }
 
-/** 保存全局配置 */
+/** 保存全局配置（必须已有全员共用的 cloud-url，禁止每人新建一份） */
 export async function saveGlobalConfig(
   config: JumpConfigFile,
   force = false,
@@ -222,16 +197,13 @@ export async function saveGlobalConfig(
     return { config: parseJumpConfig(await res.json()) }
   }
 
-  let cloud = await resolveCloudUrl()
-  let needUploadCloudUrl: string | undefined
-
+  const cloud = await resolveCloudUrl()
   if (!cloud) {
-    cloud = await createCloudStore(config)
-    rememberCloudUrl(cloud)
-    downloadCloudUrlFile(cloud)
-    needUploadCloudUrl = cloud
+    throw new Error(
+      '缺少全员共用云端地址。请在项目里执行 npm run build（会生成 data/cloud-url.txt）后重新上传整个 dist',
+    )
   }
 
   const saved = await putToCloud(cloud, config, force)
-  return { config: saved, needUploadCloudUrl }
+  return { config: saved }
 }

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "concurrently -k -n server,web -c blue,green \"npm run server\" \"vite\"",
     "server": "node server/config-server.mjs",
-    "build": "vue-tsc -b && vite build",
+    "build": "node scripts/prepare-shared-cloud.mjs && vue-tsc -b && vite build",
     "preview": "npm run build && SERVE_STATIC=1 node server/config-server.mjs",
     "start": "SERVE_STATIC=1 node server/config-server.mjs",
     "pack": "npm run build && node -e \"const{execSync}=require('child_process');execSync('rm -f release/jumpl-dist.zip && mkdir -p release && cd dist && zip -r ../release/jumpl-dist.zip .' ,{stdio:'inherit'});console.log('已生成 release/jumpl-dist.zip，上传解压到网站根目录即可')\""
