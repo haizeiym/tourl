@@ -4,9 +4,11 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently -k -n server,web -c blue,green \"npm run server\" \"vite\"",
+    "server": "node server/config-server.mjs",
     "build": "vue-tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "npm run build && SERVE_STATIC=1 node server/config-server.mjs",
+    "start": "SERVE_STATIC=1 node server/config-server.mjs"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
@@ -18,6 +20,7 @@
     "@types/node": "^24.13.3",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vue/tsconfig": "^0.9.1",
+    "concurrently": "^10.0.4",
     "tailwindcss": "^4.3.3",
     "typescript": "~6.0.2",
     "vite": "^8.2.0",

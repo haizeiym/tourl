@@ -19,6 +19,12 @@ export interface JumpItem {
 
 /** 整个配置文件 */
 export interface JumpConfigFile {
+  /**
+   * 服务端版本戳（毫秒）。
+   * 保存时带回；服务端写入成功后更新。
+   */
+  updatedAt: number
+  /** 跳转项列表（有序；Grid 按数组顺序渲染） */
   items: JumpItem[]
 }
 

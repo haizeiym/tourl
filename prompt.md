@@ -10,6 +10,7 @@
 ## 成功标准（MVP）
 
 - 可新建 / 导入 / 导出一份完整配置
+- **全局可写配置**：多人通过同一服务读写同一份配置；每次读取禁用缓存，保证拿到最新
 - 中间 Grid 展示全部跳转入口，右侧可编辑选中项
 - 支持「新标签页」与「iframe」两种打开方式，默认新标签页
 - 跳转 URL 按约定拼接参数与防缓存时间戳
@@ -17,7 +18,8 @@
 
 ## 非目标（本期不做）
 
-- 用户系统、云端同步、多人协作
+- 用户系统 / 登录鉴权 / 细粒度权限
+- 实时 OT/CRDT 协同光标（采用「拉取 + 保存 + 乐观锁」即可）
 - 图标文件上传到服务器（仅支持 URL 字符串）
 - 复杂权限、路由嵌套、多项目管理
 - 移动端优先适配（桌面可用即可）
@@ -34,7 +36,7 @@
 | UI 库 | Element Plus | 定稿（不再二选一） |
 | 样式 | Tailwind CSS | 布局与间距；组件外观以 Element Plus 为主 |
 | 状态 | 轻量 composable / `ref`+`reactive` 即可 | 不强制 Pinia |
-| 持久化 | 内存 + 显式导入/导出 JSON 文件 | 不做自动 localStorage（可后续扩展） |
+| 持久化 | **服务端全局 JSON 文件**（可写）+ 本地导入/导出备份 | 禁止用 localStorage 当全局源；读请求必须防缓存 |
 
 ---
 
@@ -67,6 +69,11 @@ export interface JumpItem {
 
 /** 整个配置文件 */
 export interface JumpConfigFile {
+  /**
+   * 服务端版本戳（毫秒时间戳）。
+   * 由服务端在每次成功写入时更新；客户端保存时带回，用于乐观锁冲突检测。
+   */
+  updatedAt: number
   /** 跳转项列表（有序；Grid 按数组顺序渲染） */
   items: JumpItem[]
 }
@@ -78,6 +85,7 @@ export interface JumpConfigFile {
 
 ```json
 {
+  "updatedAt": 0,
   "items": [
     {
       "id": "1",
@@ -95,8 +103,16 @@ export interface JumpConfigFile {
 ```
 
 - 文件扩展名：`.json`
-- 导入时校验：`items` 为数组，每项含 `id/openMode/name/url/args`，`openMode` 为 `'tab' | 'iframe'`，且 `args` 为对象（`Record<string, string>`）；失败则 Toast 提示并不覆盖当前数据
+- 导入时校验：`items` 为数组，每项含 `id/openMode/name/url/args`，`openMode` 为 `'tab' | 'iframe'`，且 `args` 为对象（`Record<string, string>`）；`updatedAt` 缺省按 `0`；失败则 Toast 提示并不覆盖当前数据
 
+## 2.2.1 全局可写多人协作
+
+- **共享源**：服务端维护一份全局配置文件（如 `data/jump-config.json`），所有客户端读写同一份
+- **读取**：`GET /api/config`，必须防缓存（`Cache-Control: no-store` 且/或 `?_t=`）；启动时自动拉取；提供「刷新全局」手动再拉
+- **写入**：`PUT /api/config`，body 为完整 `JumpConfigFile`；提供「保存到全局」
+- **冲突（乐观锁）**：客户端保存时携带当前已知的 `updatedAt`；若服务端 `updatedAt` 已变化，返回 `409`，提示用户先刷新或确认强制覆盖
+- **本地导入/导出**：仍保留，作为备份/迁移；导入只改内存，不自动写全局，需用户点「保存到全局」
+- **不做**：WebSocket 实时推送、按字段合并、用户鉴权（内网信任模型）
 ## 2.3 字段校验规则
 
 | 字段 | 规则 |
@@ -164,9 +180,11 @@ export interface JumpConfigFile {
 
 | 操作 | 行为 |
 |------|------|
-| 新建配置 | 若当前有未导出变更，先确认「丢弃当前配置？」；确认后重置为 `{ items:[] }`，清空选中 |
-| 导入配置 | 选择 `.json` 文件 → 校验 → 成功则替换当前配置并清空选中；失败不改动 |
-| 导出配置 | 将当前 `JumpConfigFile` 下载为 `jump-config.json`（或带时间戳文件名） |
+| 新建配置 | 若当前有未保存变更，先确认「丢弃当前配置？」；确认后重置为 `{ updatedAt: 当前已知或 0, items:[] }`，清空选中（仅改内存，需再「保存到全局」才写服务端） |
+| 刷新全局 | `GET /api/config` 防缓存拉取；若本地有未保存变更，先确认 |
+| 保存到全局 | `PUT /api/config`；冲突 `409` 时提示刷新或强制覆盖 |
+| 导入配置 | 选择 `.json` 文件 → 校验 → 成功则替换当前内存配置并清空选中；失败不改动；不自动写全局 |
+| 导出配置 | 将当前 `JumpConfigFile` 下载为本地 JSON（备份） |
 | 新建跳转 | 追加默认项到 `items` 末尾并选中 |
 | 根据URL添加跳转 | 弹出输入框粘贴完整 URL → 解析为跳转项并追加到 `items` 末尾并选中：`url` = origin+pathname（保留 hash，去掉 search）；query 写入 `args`（忽略 `_t`）；`name` 取路径末段或 hostname；`openMode` 默认 `tab` |
 
@@ -240,6 +258,9 @@ export interface JumpConfigFile {
 - [ ] 跳转（item.openMode=iframe）：页面内打开，可关闭返回列表
 - [ ] 删除有确认框，确认后列表与选中态正确更新
 - [ ] `url` 非法时不能跳转并有提示
+- [ ] 启动自动拉取全局配置（无缓存）
+- [ ] 保存到全局后，另一客户端刷新全局可见最新数据
+- [ ] 两人基于同一 `updatedAt` 先后保存时，后者收到冲突提示，可刷新或强制覆盖
 
 ---
 

@@ -1,0 +1,16 @@
+{
+  "updatedAt": 1786098113217,
+  "items": [
+    {
+      "id": "1",
+      "openMode": "tab",
+      "name": "测试跳转1",
+      "iconUrl": "https://bpic-oss.588ku.com/element_pic/24/01/23/5211d591b945af11e857fcbe593bba21.png?x-oss-process=image/resize,w_350/quality,q_99/sharpen,100",
+      "url": "https://example.com/path",
+      "args": {
+        "key1": "value",
+        "key2": "value"
+      }
+    }
+  ]
+}

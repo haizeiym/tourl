@@ -46,7 +46,7 @@ export function createJumpItemFromUrl(raw: string): JumpItem {
 }
 
 export function createEmptyConfig(): JumpConfigFile {
-  return { items: [] }
+  return { updatedAt: 0, items: [] }
 }
 
 export function isHttpUrl(value: string): boolean {
@@ -125,7 +125,9 @@ export function parseJumpConfig(raw: unknown): JumpConfigFile {
   if (!Array.isArray(obj.items)) {
     throw new Error('缺少 items 数组')
   }
+  const updatedAt = typeof obj.updatedAt === 'number' ? obj.updatedAt : 0
   return {
+    updatedAt,
     items: obj.items.map((item, i) => normalizeItem(item, i)),
   }
 }

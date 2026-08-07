@@ -2,6 +2,11 @@ import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { JumpConfigFile, JumpItem } from '../types/jump'
 import {
+  ConfigConflictError,
+  fetchGlobalConfig,
+  saveGlobalConfig,
+} from '../utils/api'
+import {
   buildJumpUrl,
   createEmptyConfig,
   createJumpItem,
@@ -17,6 +22,8 @@ export function useJumpStore() {
   const dirty = ref(false)
   const iframeSrc = ref<string | null>(null)
   const focusNameToken = ref(0)
+  const loading = ref(false)
+  const saving = ref(false)
 
   const selectedItem = computed(() => {
     if (!selectedId.value) return null
@@ -38,9 +45,9 @@ export function useJumpStore() {
   }
 
   async function confirmDiscardIfNeeded(): Promise<boolean> {
-    if (config.value.items.length === 0 && !dirty.value) return true
+    if (!dirty.value) return true
     try {
-      await ElMessageBox.confirm('丢弃当前配置？未导出的修改将丢失。', '提示', {
+      await ElMessageBox.confirm('丢弃当前未保存的修改？', '提示', {
         type: 'warning',
         confirmButtonText: '丢弃',
         cancelButtonText: '取消',
@@ -51,14 +58,82 @@ export function useJumpStore() {
     }
   }
 
+  function applyConfig(next: JumpConfigFile, clearDirty = true) {
+    config.value = next
+    selectedId.value = null
+    if (clearDirty) dirty.value = false
+    closeIframe()
+  }
+
+  async function loadGlobalConfig(opts?: { confirmDirty?: boolean }) {
+    if (opts?.confirmDirty !== false) {
+      const ok = await confirmDiscardIfNeeded()
+      if (!ok) return
+    }
+    loading.value = true
+    try {
+      const remote = await fetchGlobalConfig()
+      applyConfig(remote)
+      ElMessage.success(`已加载全局配置（${remote.items.length} 项）`)
+    } catch (err) {
+      console.error('[loadGlobalConfig]', err)
+      const msg = err instanceof Error ? err.message : '加载失败'
+      ElMessage.error(`加载全局配置失败：${msg}`)
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function refreshGlobal() {
+    await loadGlobalConfig({ confirmDirty: true })
+  }
+
+  async function saveToGlobal(force = false) {
+    saving.value = true
+    try {
+      const saved = await saveGlobalConfig(config.value, force)
+      config.value = saved
+      dirty.value = false
+      ElMessage.success('已保存到全局配置')
+    } catch (err) {
+      console.error('[saveToGlobal]', err)
+      if (err instanceof ConfigConflictError) {
+        try {
+          await ElMessageBox.confirm(
+            `${err.message}\n\n选择「强制覆盖」将用你的版本覆盖他人修改；或取消后点「刷新全局」。`,
+            '保存冲突',
+            {
+              type: 'warning',
+              distinguishCancelAndClose: true,
+              confirmButtonText: '强制覆盖',
+              cancelButtonText: '取消',
+            },
+          )
+          await saveToGlobal(true)
+        } catch {
+          /* cancelled */
+        }
+        return
+      }
+      const msg = err instanceof Error ? err.message : '保存失败'
+      ElMessage.error(`保存失败：${msg}`)
+    } finally {
+      saving.value = false
+    }
+  }
+
   async function newConfig() {
     const ok = await confirmDiscardIfNeeded()
     if (!ok) return
-    config.value = createEmptyConfig()
+    // 保留已知 updatedAt，便于之后保存时走冲突检测
+    config.value = {
+      updatedAt: config.value.updatedAt,
+      items: [],
+    }
     selectedId.value = null
-    dirty.value = false
+    dirty.value = true
     closeIframe()
-    ElMessage.success('已新建空配置')
+    ElMessage.success('已清空本地配置（保存到全局后生效）')
   }
 
   function addJump() {
@@ -72,13 +147,17 @@ export function useJumpStore() {
   async function addJumpFromUrl() {
     let input: string
     try {
-      const result = await ElMessageBox.prompt('粘贴完整 URL，将自动拆分地址与参数', '根据 URL 添加跳转', {
-        confirmButtonText: '添加',
-        cancelButtonText: '取消',
-        inputPlaceholder: 'https://example.com/path?key=value',
-        inputPattern: /^https?:\/\/.+/i,
-        inputErrorMessage: '请填写有效的 http(s) 地址',
-      })
+      const result = await ElMessageBox.prompt(
+        '粘贴完整 URL，将自动拆分地址与参数',
+        '根据 URL 添加跳转',
+        {
+          confirmButtonText: '添加',
+          cancelButtonText: '取消',
+          inputPlaceholder: 'https://example.com/path?key=value',
+          inputPattern: /^https?:\/\/.+/i,
+          inputErrorMessage: '请填写有效的 http(s) 地址',
+        },
+      )
       input = result.value
     } catch {
       return
@@ -103,11 +182,13 @@ export function useJumpStore() {
       const text = await file.text()
       const raw: unknown = JSON.parse(text)
       const parsed = parseJumpConfig(raw)
-      config.value = parsed
-      selectedId.value = null
-      dirty.value = false
-      closeIframe()
-      ElMessage.success(`导入成功，共 ${parsed.items.length} 项`)
+      // 导入只改内存；保留当前服务端版本戳，避免误覆盖时跳过冲突检测
+      applyConfig(
+        { updatedAt: config.value.updatedAt, items: parsed.items },
+        false,
+      )
+      dirty.value = true
+      ElMessage.success(`导入成功，共 ${parsed.items.length} 项（需保存到全局才同步）`)
     } catch (err) {
       console.error('[importConfig]', err)
       const msg = err instanceof Error ? err.message : '文件格式无效'
@@ -118,8 +199,7 @@ export function useJumpStore() {
   function exportConfig() {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
     downloadJson(`jump-config-${stamp}.json`, config.value)
-    dirty.value = false
-    ElMessage.success('已导出配置')
+    ElMessage.success('已导出本地备份')
   }
 
   function updateSelected(patch: Partial<JumpItem>) {
@@ -195,8 +275,13 @@ export function useJumpStore() {
     iframeSrc,
     isIframePreview,
     focusNameToken,
+    loading,
+    saving,
     selectItem,
     clearSelection,
+    loadGlobalConfig,
+    refreshGlobal,
+    saveToGlobal,
     newConfig,
     addJump,
     addJumpFromUrl,

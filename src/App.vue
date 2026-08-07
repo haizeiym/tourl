@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { onMounted } from 'vue'
 import { useJumpStore } from './composables/useJumpStore'
 import TopBar from './components/TopBar.vue'
 import JumpGrid from './components/JumpGrid.vue'
@@ -6,6 +7,10 @@ import InspectorPanel from './components/InspectorPanel.vue'
 import IframePreview from './components/IframePreview.vue'
 
 const store = useJumpStore()
+
+onMounted(() => {
+  void store.loadGlobalConfig({ confirmDirty: false })
+})
 </script>
 
 <template>
