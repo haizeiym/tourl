@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { Delete, Position } from '@element-plus/icons-vue'
+import { CopyDocument, Delete, Position } from '@element-plus/icons-vue'
 import type { JumpStore } from '../composables/useJumpStore'
 import type { ArgRow, OpenMode } from '../types/jump'
 
@@ -149,16 +149,21 @@ function onUrl(val: string) {
             />
             <el-button :icon="Delete" @click="removeArgRow(index)" />
           </div>
+          <!-- 紧跟参数列表下方，随参数行数下移 -->
+          <div class="mt-3 space-y-2">
+            <el-button class="w-full" :icon="CopyDocument" @click="store.duplicateSelected()">
+              复制当前配置
+            </el-button>
+            <div class="flex gap-2">
+              <el-button type="primary" class="flex-1" :icon="Position" @click="store.jumpSelected()">
+                跳转
+              </el-button>
+              <el-button type="danger" plain class="flex-1" :icon="Delete" @click="store.deleteSelected()">
+                删除
+              </el-button>
+            </div>
+          </div>
         </div>
-      </div>
-
-      <div class="flex gap-2 border-t border-slate-100 p-4">
-        <el-button type="primary" class="flex-1" :icon="Position" @click="store.jumpSelected()">
-          跳转
-        </el-button>
-        <el-button type="danger" plain class="flex-1" :icon="Delete" @click="store.deleteSelected()">
-          删除
-        </el-button>
       </div>
     </div>
   </aside>

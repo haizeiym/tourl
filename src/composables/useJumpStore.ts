@@ -9,6 +9,7 @@ import {
 import {
   buildJumpUrl,
   createEmptyConfig,
+  createId,
   createJumpItem,
   createJumpItemFromUrl,
   downloadJson,
@@ -221,6 +222,37 @@ export function useJumpStore() {
     markDirty()
   }
 
+  function duplicateSelected() {
+    const source = selectedItem.value
+    if (!source) {
+      ElMessage.warning('请先选择一个跳转')
+      return
+    }
+    try {
+      const copy: JumpItem = {
+        id: createId(),
+        openMode: source.openMode,
+        name: `${source.name} 副本`.slice(0, 64),
+        iconUrl: source.iconUrl,
+        url: source.url,
+        args: { ...source.args },
+      }
+      const index = config.value.items.findIndex((i) => i.id === source.id)
+      if (index >= 0) {
+        config.value.items.splice(index + 1, 0, copy)
+      } else {
+        config.value.items.push(copy)
+      }
+      selectedId.value = copy.id
+      markDirty()
+      focusNameToken.value += 1
+      ElMessage.success('已复制当前配置')
+    } catch (err) {
+      console.error('[duplicateSelected]', err)
+      ElMessage.error(err instanceof Error ? err.message : '复制失败')
+    }
+  }
+
   async function deleteSelected() {
     const item = selectedItem.value
     if (!item) return
@@ -294,6 +326,7 @@ export function useJumpStore() {
     exportConfig,
     updateSelected,
     setArgs,
+    duplicateSelected,
     deleteSelected,
     jumpSelected,
     closeIframe,
