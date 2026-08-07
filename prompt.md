@@ -168,6 +168,7 @@ export interface JumpConfigFile {
 | 导入配置 | 选择 `.json` 文件 → 校验 → 成功则替换当前配置并清空选中；失败不改动 |
 | 导出配置 | 将当前 `JumpConfigFile` 下载为 `jump-config.json`（或带时间戳文件名） |
 | 新建跳转 | 追加默认项到 `items` 末尾并选中 |
+| 根据URL添加跳转 | 弹出输入框粘贴完整 URL → 解析为跳转项并追加到 `items` 末尾并选中：`url` = origin+pathname（保留 hash，去掉 search）；query 写入 `args`（忽略 `_t`）；`name` 取路径末段或 hostname；`openMode` 默认 `tab` |
 
 ## 4.2 中间 Grid 列表
 

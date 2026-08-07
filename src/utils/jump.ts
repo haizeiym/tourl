@@ -11,6 +11,40 @@ export function createJumpItem(): JumpItem {
   }
 }
 
+/**
+ * 从完整 URL 解析出跳转项：
+ * - url = origin + pathname（不含 search；保留 hash）
+ * - args = query 键值对（忽略空 key；忽略防缓存参数 `_t`）
+ * - name = 路径末段，否则用 hostname
+ */
+export function createJumpItemFromUrl(raw: string): JumpItem {
+  const trimmed = raw.trim()
+  if (!isHttpUrl(trimmed)) {
+    throw new Error('请填写有效的 http(s) 地址')
+  }
+  const parsed = new URL(trimmed)
+  const args: Record<string, string> = {}
+  parsed.searchParams.forEach((value, key) => {
+    if (!key || key === '_t') return
+    args[key] = value
+  })
+
+  const segments = parsed.pathname.split('/').filter(Boolean)
+  const last = segments[segments.length - 1]
+  const name = last ? decodeURIComponent(last) : parsed.hostname
+
+  const base = `${parsed.origin}${parsed.pathname}${parsed.hash}`
+
+  return {
+    id: crypto.randomUUID(),
+    openMode: 'tab',
+    name: name.slice(0, 64) || '未命名跳转',
+    iconUrl: '',
+    url: base,
+    args,
+  }
+}
+
 export function createEmptyConfig(): JumpConfigFile {
   return { items: [] }
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { DocumentAdd, Download, FolderOpened, Plus } from '@element-plus/icons-vue'
+import { DocumentAdd, Download, FolderOpened, Link, Plus } from '@element-plus/icons-vue'
 import { ref } from 'vue'
 import type { JumpStore } from '../composables/useJumpStore'
 
@@ -32,6 +32,7 @@ async function onFileChange(e: Event) {
     <el-button :icon="FolderOpened" @click="onPickFile">导入配置</el-button>
     <el-button :icon="Download" @click="store.exportConfig()">导出配置</el-button>
     <el-button type="primary" :icon="Plus" @click="store.addJump()">新建跳转</el-button>
+    <el-button :icon="Link" @click="store.addJumpFromUrl()">根据 URL 添加</el-button>
     <input
       ref="fileInput"
       type="file"

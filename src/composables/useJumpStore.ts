@@ -5,6 +5,7 @@ import {
   buildJumpUrl,
   createEmptyConfig,
   createJumpItem,
+  createJumpItemFromUrl,
   downloadJson,
   isHttpUrl,
   parseJumpConfig,
@@ -66,6 +67,35 @@ export function useJumpStore() {
     selectedId.value = item.id
     markDirty()
     focusNameToken.value += 1
+  }
+
+  async function addJumpFromUrl() {
+    let input: string
+    try {
+      const result = await ElMessageBox.prompt('粘贴完整 URL，将自动拆分地址与参数', '根据 URL 添加跳转', {
+        confirmButtonText: '添加',
+        cancelButtonText: '取消',
+        inputPlaceholder: 'https://example.com/path?key=value',
+        inputPattern: /^https?:\/\/.+/i,
+        inputErrorMessage: '请填写有效的 http(s) 地址',
+      })
+      input = result.value
+    } catch {
+      return
+    }
+
+    try {
+      const item = createJumpItemFromUrl(input)
+      config.value.items.push(item)
+      selectedId.value = item.id
+      markDirty()
+      focusNameToken.value += 1
+      ElMessage.success('已根据 URL 添加跳转')
+    } catch (err) {
+      console.error('[addJumpFromUrl]', err)
+      const msg = err instanceof Error ? err.message : 'URL 解析失败'
+      ElMessage.error(msg)
+    }
   }
 
   async function importConfig(file: File) {
@@ -169,6 +199,7 @@ export function useJumpStore() {
     clearSelection,
     newConfig,
     addJump,
+    addJumpFromUrl,
     importConfig,
     exportConfig,
     updateSelected,
