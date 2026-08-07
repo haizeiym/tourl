@@ -14,4 +14,13 @@ body {
     -apple-system,
     sans-serif;
   -webkit-font-smoothing: antialiased;
+  /* 避免移动端横向溢出 */
+  overflow-x: hidden;
+}
+
+/* 安全区（刘海屏底部） */
+@supports (padding: env(safe-area-inset-bottom)) {
+  #app {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
 }

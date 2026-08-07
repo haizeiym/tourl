@@ -46,16 +46,20 @@ async function createBlob(seed) {
 }
 
 async function putBlob(url, seed) {
-  const res = await fetch(url, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    body: JSON.stringify(seed),
-  })
-  if (!res.ok) {
-    console.warn(`[prepare-shared-cloud] 同步种子失败 HTTP ${res.status}`)
+  try {
+    const res = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(seed),
+    })
+    if (!res.ok) {
+      console.warn(`[prepare-shared-cloud] 同步种子失败 HTTP ${res.status}`)
+    }
+  } catch (err) {
+    console.warn('[prepare-shared-cloud] 同步种子网络失败，沿用已有 cloud-url', err)
   }
 }
 

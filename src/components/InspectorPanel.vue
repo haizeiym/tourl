@@ -1,11 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { CopyDocument, Delete, Position } from '@element-plus/icons-vue'
+import { ArrowLeft, CopyDocument, Delete, Position } from '@element-plus/icons-vue'
 import type { JumpStore } from '../composables/useJumpStore'
 import type { ArgRow, OpenMode } from '../types/jump'
 
 const props = defineProps<{
   store: JumpStore
+  isMobile?: boolean
+}>()
+
+const emit = defineEmits<{
+  back: []
 }>()
 
 const nameInput = ref<{ focus: () => void; select?: () => void } | null>(null)
@@ -76,14 +81,30 @@ function onIconUrl(val: string) {
 function onUrl(val: string) {
   props.store.updateSelected({ url: val })
 }
+
+async function onDelete() {
+  await props.store.deleteSelected()
+  if (props.isMobile) emit('back')
+}
 </script>
 
 <template>
   <aside
-    class="flex w-80 shrink-0 flex-col border-l border-slate-200 bg-white"
+    class="flex min-h-0 flex-col border-slate-200 bg-white"
+    :class="isMobile ? 'w-full flex-1 border-0' : 'w-80 shrink-0 border-l'"
   >
-    <div class="border-b border-slate-100 px-4 py-3 text-sm font-medium text-slate-700">
-      属性面板
+    <div
+      class="flex items-center gap-2 border-b border-slate-100 px-3 py-3 text-sm font-medium text-slate-700 md:px-4"
+    >
+      <el-button
+        v-if="isMobile"
+        text
+        :icon="ArrowLeft"
+        @click="emit('back')"
+      >
+        返回
+      </el-button>
+      <span>属性面板</span>
     </div>
 
     <div v-if="!item" class="flex flex-1 items-center justify-center px-4 text-sm text-slate-400">
@@ -91,7 +112,7 @@ function onUrl(val: string) {
     </div>
 
     <div v-else class="flex min-h-0 flex-1 flex-col">
-      <div class="flex-1 space-y-4 overflow-auto p-4">
+      <div class="flex-1 space-y-4 overflow-auto p-3 md:p-4">
         <div>
           <label class="mb-1 block text-xs text-slate-500">名称</label>
           <el-input
@@ -149,7 +170,6 @@ function onUrl(val: string) {
             />
             <el-button :icon="Delete" @click="removeArgRow(index)" />
           </div>
-          <!-- 紧跟参数列表下方，随参数行数下移 -->
           <div class="mt-3 space-y-2">
             <el-button class="w-full" :icon="CopyDocument" @click="store.duplicateSelected()">
               复制当前配置
@@ -158,7 +178,7 @@ function onUrl(val: string) {
               <el-button type="primary" class="flex-1" :icon="Position" @click="store.jumpSelected()">
                 跳转
               </el-button>
-              <el-button type="danger" plain class="flex-1" :icon="Delete" @click="store.deleteSelected()">
+              <el-button type="danger" plain class="flex-1" :icon="Delete" @click="onDelete">
                 删除
               </el-button>
             </div>

@@ -6,6 +6,7 @@ import { displayInitial } from '../utils/jump'
 const props = defineProps<{
   item: JumpItem
   selected: boolean
+  compact?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -27,12 +28,16 @@ const showImg = () => Boolean(props.item.iconUrl) && !imgFailed.value
 <template>
   <button
     type="button"
-    class="flex w-full flex-col items-center gap-2 rounded-lg border-2 bg-white p-3 text-center transition hover:border-blue-300 hover:shadow-sm"
-    :class="selected ? 'border-blue-500 shadow-sm' : 'border-transparent'"
+    class="flex w-full flex-col items-center text-center transition hover:border-blue-300 hover:shadow-sm"
+    :class="[
+      compact ? 'gap-1.5 rounded-lg border-2 bg-white p-2' : 'gap-2 rounded-lg border-2 bg-white p-3',
+      selected ? 'border-blue-500 shadow-sm' : 'border-transparent',
+    ]"
     @click="emit('select', item.id)"
   >
     <div
-      class="flex h-16 w-16 items-center justify-center overflow-hidden rounded-xl bg-slate-100 text-xl font-semibold text-slate-600"
+      class="flex items-center justify-center overflow-hidden rounded-xl bg-slate-100 font-semibold text-slate-600"
+      :class="compact ? 'h-12 w-12 text-lg' : 'h-16 w-16 text-xl'"
     >
       <img
         v-if="showImg()"
@@ -43,7 +48,11 @@ const showImg = () => Boolean(props.item.iconUrl) && !imgFailed.value
       />
       <span v-else>{{ displayInitial(item.name) }}</span>
     </div>
-    <div class="w-full truncate text-sm text-slate-700" :title="item.name">
+    <div
+      class="w-full truncate text-slate-700"
+      :class="compact ? 'text-xs' : 'text-sm'"
+      :title="item.name"
+    >
       {{ item.name || '未命名' }}
     </div>
   </button>
