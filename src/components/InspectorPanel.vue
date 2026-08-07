@@ -106,7 +106,7 @@ function onUrl(val: string) {
           <label class="mb-1 block text-xs text-slate-500">打开方式</label>
           <el-radio-group :model-value="item.openMode" @update:model-value="onOpenMode">
             <el-radio-button value="tab">新标签页</el-radio-button>
-            <el-radio-button value="iframe">iframe</el-radio-button>
+            <el-radio-button value="iframe">当前页</el-radio-button>
           </el-radio-group>
         </div>
 

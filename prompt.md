@@ -189,7 +189,7 @@ export interface JumpConfigFile {
 | 控件 | 绑定字段 |
 |------|----------|
 | 名称 | `name` |
-| 打开方式 | `openMode`：单选 `新标签页(tab)` / `iframe`；默认 `tab` |
+| 打开方式 | `openMode`：单选 `新标签页(tab)` / `当前页(iframe)`；默认 `tab` |
 | 图标 URL | `iconUrl` |
 | 跳转地址 | `url` |
 | 参数列表 | `args`：可「添加参数」「删除单行」；每行两个输入框（key / value），写回 `Record<string, string>` |
