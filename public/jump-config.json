@@ -1,0 +1,25 @@
+{
+  "items": [
+    {
+      "id": "1",
+      "openMode": "tab",
+      "name": "测试跳转1",
+      "iconUrl": "",
+      "url": "https://example.com/path",
+      "args": {
+        "key1": "value",
+        "key2": "value"
+      }
+    },
+    {
+      "id": "2",
+      "openMode": "iframe",
+      "name": "iframe 示例",
+      "iconUrl": "",
+      "url": "https://example.com",
+      "args": {
+        "from": "jump-tool"
+      }
+    }
+  ]
+}
