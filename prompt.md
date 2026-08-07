@@ -272,8 +272,9 @@ export interface JumpConfigFile {
 2. 严格类型，避免 `any`
 3. Element Plus 中文 locale；关键交互 Toast / 确认框
 4. 生产构建：`node scripts/prepare-shared-cloud.mjs && vue-tsc -b && vite build`
-5. 部署：上传**整个** `dist/`（含 `data/cloud-url.txt` 与 `data/jump-config.json`）；服务器无需 Node/PHP
-6. 他人若曾保存过个人云端：硬刷新后以站点 `cloud-url.txt` 为准对齐
+5. 部署：服务器无需 Node/PHP。发版更新前端时优先覆盖 `index.html` + `assets/`；**保留线上一致的 `data/cloud-url.txt`**（勿指向新云端地址）
+6. `npm run build` 默认不把本地种子 PUT 到云端；仅 `SYNC_CLOUD_SEED=1` 时才重置云端
+7. 他人若曾保存过个人云端：硬刷新后以站点 `cloud-url.txt` 为准对齐
 
 ---
 

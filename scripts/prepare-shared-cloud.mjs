@@ -77,8 +77,14 @@ async function main() {
     url = await createBlob(seed)
     console.log(`[prepare-shared-cloud] ${url}`)
   } else {
-    console.log(`[prepare-shared-cloud] 复用已有云端并同步种子：${url}`)
-    await putBlob(url, seed)
+    // 默认不覆盖云端已有数据（避免发版把线上全局配置冲掉）
+    // 若确需用本地种子重置云端：SYNC_CLOUD_SEED=1 npm run build
+    if (process.env.SYNC_CLOUD_SEED === '1') {
+      console.log(`[prepare-shared-cloud] SYNC_CLOUD_SEED=1，用本地种子覆盖云端：${url}`)
+      await putBlob(url, seed)
+    } else {
+      console.log(`[prepare-shared-cloud] 复用已有云端（不覆盖线上数据）：${url}`)
+    }
   }
 
   writeUrl(url)
