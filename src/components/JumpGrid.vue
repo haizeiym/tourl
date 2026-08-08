@@ -18,7 +18,7 @@ defineProps<{
     </div>
     <div
       v-else
-      class="grid gap-2 md:gap-3"
+      class="grid items-start gap-2 md:gap-3"
       :style="{
         gridTemplateColumns: isMobile
           ? 'repeat(auto-fill, minmax(96px, 1fr))'

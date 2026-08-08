@@ -7,6 +7,8 @@ import type { ArgRow, OpenMode } from '../types/jump'
 const props = defineProps<{
   store: JumpStore
   isMobile?: boolean
+  /** 桌面端宽度（px），由外层拖拽控制 */
+  width?: number
 }>()
 
 const emit = defineEmits<{
@@ -91,7 +93,8 @@ async function onDelete() {
 <template>
   <aside
     class="flex min-h-0 flex-col border-slate-200 bg-white"
-    :class="isMobile ? 'w-full flex-1 border-0' : 'w-80 shrink-0 border-l'"
+    :class="isMobile ? 'w-full flex-1 border-0' : 'shrink-0 border-l'"
+    :style="isMobile ? undefined : { width: `${width ?? 320}px` }"
   >
     <div
       class="flex items-center gap-2 border-b border-slate-100 px-3 py-3 text-sm font-medium text-slate-700 md:px-4"

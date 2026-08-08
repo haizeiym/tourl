@@ -36,7 +36,7 @@ const showImg = () => Boolean(props.item.iconUrl) && !imgFailed.value
     @click="emit('select', item.id)"
   >
     <div
-      class="flex items-center justify-center overflow-hidden rounded-xl bg-slate-100 font-semibold text-slate-600"
+      class="flex shrink-0 items-center justify-center overflow-hidden rounded-xl bg-slate-100 font-semibold text-slate-600"
       :class="compact ? 'h-12 w-12 text-lg' : 'h-16 w-16 text-xl'"
     >
       <img
@@ -48,10 +48,10 @@ const showImg = () => Boolean(props.item.iconUrl) && !imgFailed.value
       />
       <span v-else>{{ displayInitial(item.name) }}</span>
     </div>
+    <!-- 名称完整展示：允许换行，不截断 -->
     <div
-      class="w-full truncate text-slate-700"
-      :class="compact ? 'text-xs' : 'text-sm'"
-      :title="item.name"
+      class="w-full break-words text-slate-700 [overflow-wrap:anywhere]"
+      :class="compact ? 'text-xs leading-snug' : 'text-sm leading-snug'"
     >
       {{ item.name || '未命名' }}
     </div>

@@ -215,10 +215,12 @@ export interface JumpConfigFile {
 
 ## 4.2 中间 Grid 列表
 
-- CSS Grid，`auto-fill`，单卡最小约 120px
+- CSS Grid，`auto-fill`，单卡最小约 120px（移动端约 96px）
+- **名称完整显示**：不使用单行截断（`truncate`）；允许换行（`break-words`），卡片高度随名称自适应
 - 上图标下名称；无/失败 `iconUrl` 用名称首字（空名为 `?`）
 - 单击选中，高亮；空列表提示新建
 - 顺序同 `items`；不做拖拽排序
+- 右侧属性面板宽度变化时，Grid 区域随 flex 自动重排列数
 
 ## 4.3 右侧属性面板（Inspector）
 
@@ -241,6 +243,13 @@ export interface JumpConfigFile {
 不再使用面板底部固定底栏。
 
 属性即时写回内存；持久化依赖「保存到全局」或「导出」。
+
+### 桌面端宽度拖拽
+
+- 属性面板与中间 Grid 之间提供可拖拽分隔条（左右拉动）
+- 默认宽度约 320px；最小约 280px；最大不超过视口约 70%
+- 拖拽时属性面板变宽/变窄，中间 Grid 自动占满剩余空间并重排
+- 宽度可写入 `localStorage` 以便下次打开保持
 
 ## 4.4 跳转打开方式
 
