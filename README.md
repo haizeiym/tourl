@@ -1,42 +1,57 @@
 # URL 跳转工具
 
-## 一步部署（全员同一份配置）
+## 数据持久化（硬性）
+
+生产环境全局配置**必须**落在稳定持久化存储上：
+
+- ✅ 推荐：Cloudflare Workers + KV（本仓库 `config-api/`，免费、地址固定、数据不因发版丢失）
+- ✅ 可替换：任意自建/稳定第三方 HTTP API（长期保存、固定 URL、支持 GET/PUT）
+- ❌ 禁止：jsonblob、临时 paste 类、仅 localStorage、每次构建换新地址
+
+---
+
+## 一次性：部署持久化 API（Cloudflare）
 
 ```bash
-npm install
+npx wrangler login
+
+cd config-api
+npx wrangler kv namespace create JUMP_CONFIG
+# 把输出的 id 填进 wrangler.toml 的 id =
+
+cd ..
+npm run deploy:config-api
+```
+
+将部署得到的地址写入 **`data/cloud-url.txt`**（仅一行）：
+
+```text
+https://jumpl-config.<你的账号>.workers.dev/config
+```
+
+上传该文件到站点 `data/cloud-url.txt`。此后**永远不要换这个地址**。
+
+未配置有效地址时，`npm run build` 会失败（本地调试可 `SKIP_CLOUD=1 npm run build`）。
+
+---
+
+## 前端发版（不丢数据）
+
+```bash
 npm run build
 ```
 
-上传 **`dist/`** 到网站根目录。全局可写配置存在 **云端**（由 `data/cloud-url.txt` 指向），不在服务器磁盘上的业务 JSON 里。
+只更新：`index.html`、`assets/`  
+保留：`data/cloud-url.txt`（固定 Worker 地址）
 
-## 发版时不要冲掉全局配置
+数据在 Cloudflare KV，与静态站点发版无关。
 
-### 全局配置在哪？
-
-| 位置 | 作用 |
-|------|------|
-| `data/cloud-url.txt` | 全员共用的云端地址（**务必保持同一行 URL**） |
-| 云端 JSON（jsonblob） | 真正的全局配置内容（保存到全局写这里） |
-| `data/jump-config.json` | 仅兜底/种子，有云端时**不会**作为主数据源 |
-
-### 建议只覆盖这些（前端更新）
-
-- `index.html`
-- `assets/`（整目录替换即可）
-- `favicon.svg` / `icons.svg`（可选）
-
-### 不要随便覆盖 / 改掉
-
-- **`data/cloud-url.txt`**：换成别的地址 = 连到另一份空/旧配置，看起来像「全局被覆盖」
-- 若整包上传 `dist/`：可以覆盖 `cloud-url.txt`，但内容必须仍是**原来那一行**（本地 `data/cloud-url.txt` / `public/data/cloud-url.txt` 不要删、不要重新生成新 blob）
-
-### 构建注意
-
-- 默认 `npm run build` **不会**再用本地种子去 PUT 覆盖云端
-- 只有明确要重置云端时才用：`SYNC_CLOUD_SEED=1 npm run build`
+---
 
 ## 本地开发
 
 ```bash
 npm run dev
 ```
+
+使用本机 Node API（`data/jump-config.json`）。

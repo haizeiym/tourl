@@ -10,7 +10,7 @@
 ## 成功标准（MVP）
 
 - 可新建 / 导入 / 导出一份完整配置
-- **全局可写且全员一致**：所有人读写**同一**云端配置；读取带防缓存参数；禁止每人各自一份云端地址
+- **全局可写、全员一致且必须持久化**：同一稳定存储（可依赖 Cloudflare 等稳定第三方）；禁止 jsonblob 等会过期方案；发版不得更换存储地址
 - 中间 Grid 展示全部跳转入口，右侧可编辑选中项
 - 支持「新标签页」与「当前页(iframe)」两种打开方式，默认新标签页
 - 跳转 URL 按约定拼接参数与防缓存时间戳
@@ -113,30 +113,38 @@ export interface JumpConfigFile {
 - 文件扩展名：`.json`
 - 导入时校验：`items` 为数组，每项含 `id/openMode/name/url/args`，`openMode` 为 `'tab' | 'iframe'`，且 `args` 为对象；`updatedAt` 缺省按 `0`；失败则 Toast 且不覆盖当前数据
 
-## 2.2.1 全局可写多人协作（生产：静态站）
+## 2.2.1 全局可写多人协作（生产：必须持久化）
 
-适用于像 `bot.ht666.xyz` 这类**仅 nginx 静态托管、不执行 PHP、不跑 Node** 的环境。
+### 硬性要求
 
-### 共享约定
+1. **无论如何必须数据持久化**：生产环境「保存到全局」的数据不得因发版、刷新、换机器、第三方临时库过期而丢失
+2. **可以依赖稳定的第三方**（推荐 Cloudflare Workers + KV；也可自建等价 API），须同时满足：
+   - 有持久存储（KV / DB / 对象存储等），**无“短期过期自动删除”**
+   - 提供**长期稳定**的 HTTPS 读写地址（发版不更换）
+   - 支持 GET 读全量配置、PUT 写全量配置；建议支持乐观锁（`updatedAt` / 409）
+   - CORS 允许前端站点跨域访问
+3. **禁止不稳定方案**（实现与构建须拦截）：
+   - jsonblob、类似“临时 pastebin / 会过期的 JSON 托管”
+   - 仅靠浏览器 localStorage / 仅靠静态 `jump-config.json` 充当多人可写源
+   - 每次构建自动创建新存储地址（导致旧数据失联）
 
-| 文件 | 作用 |
+### 本仓库默认实现（稳定第三方）
+
+| 位置 | 作用 |
 |------|------|
-| `dist/data/cloud-url.txt` | **全员共用**云端配置地址，一行 `https://...`（由 `npm run build` 生成/复用） |
-| `dist/data/jump-config.json` | 种子/兜底静态配置；有云端地址时**以云端为准** |
+| Cloudflare Worker + KV（`config-api/`） | **真正的全局配置存储**（持久、可写、乐观锁）——稳定第三方 |
+| `data/cloud-url.txt` | 指向该 API 的**固定**地址（一行 https；一旦写好发版**禁止更换**） |
+| `data/jump-config.json` | 仅本地种子；云端不可用时的**只读兜底**（不可作为生产唯一写入源） |
 
 ### 行为
 
-- **构建**：`scripts/prepare-shared-cloud.mjs` 创建或复用云端库，同步种子数据，写入 `public/data/cloud-url.txt`（进入 `dist`）
-- **读取**：启动 /「刷新全局」→ 读站点 `data/cloud-url.txt`（`?_t=` 防缓存）→ 再 GET 该云端 URL（防缓存）；**站点文件优先于 localStorage**，读到后写回 localStorage，避免每人地址不一致
-- **写入**：「保存到全局」→ PUT 到上述**同一**云端 URL；更新 `updatedAt`；**禁止**在浏览器里再创建个人云端库
-- **冲突（乐观锁）**：保存前比对云端 `updatedAt`；不一致则提示刷新或强制覆盖
-- **本地导入/导出**：备份/迁移；导入只改内存，需再点「保存到全局」才同步他人
-- **不做**：WebSocket 推送、按字段合并、用户鉴权
-
-### 开发环境
-
-- `npm run dev`：Vite 代理 `/api` → 本地 `server/config-server.mjs`，读写 `data/jump-config.json`
-- 生产逻辑不依赖 `/api/config` 或 `config.php`
+- **上线前一次性**：部署 `config-api`（见 README）→ 得到稳定 URL → 写入 `cloud-url.txt` → 上传到站点 `data/`
+- **读取**：启动/刷新 → 读 `cloud-url.txt` → GET 持久化 API（`?_t=` 防缓存）；站点文件优先于 localStorage；**拒绝 jsonblob 地址**
+- **写入**：保存到全局 → PUT 持久化 API；冲突 409 可强制覆盖；无有效持久化地址时**明确报错**，不得静默写临时库
+- **前端发版**：只更新 `index.html` + `assets/`；**永不更换** `cloud-url.txt`（换地址=换库=人为丢数据）
+- **构建**：`ensure-cloud-url.mjs` 校验并同步地址；指向不稳定域名或未配置时构建应失败（可用 `SKIP_CLOUD=1` 仅供本地调试）
+- **开发环境**：`npm run dev` 用本地 Node `/api/config`（本机文件持久即可）
+- **备份**：支持导出 JSON；迁移存储前必须先导出
 
 ## 2.3 字段校验规则
 
@@ -281,9 +289,9 @@ export interface JumpConfigFile {
 2. 严格类型，避免 `any`
 3. Element Plus 中文 locale；关键交互 Toast / 确认框
 4. 生产构建：`node scripts/prepare-shared-cloud.mjs && vue-tsc -b && vite build`
-5. 部署：服务器无需 Node/PHP。发版更新前端时优先覆盖 `index.html` + `assets/`；**保留线上一致的 `data/cloud-url.txt`**（勿指向新云端地址）
-6. `npm run build` 默认不把本地种子 PUT 到云端；仅 `SYNC_CLOUD_SEED=1` 时才重置云端
-7. 他人若曾保存过个人云端：硬刷新后以站点 `cloud-url.txt` 为准对齐
+5. 生产全局配置使用 Cloudflare Worker + KV（`config-api/`）；`cloud-url.txt` 指向该固定地址
+6. 发版只覆盖 `index.html` + `assets/`；**禁止更换** `cloud-url.txt`（更换等于换库）
+7. 构建不创建临时云端、不用种子覆盖线上数据
 
 ---
 

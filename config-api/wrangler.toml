@@ -1,0 +1,7 @@
+name = "jumpl-config"
+main = "worker.js"
+compatibility_date = "2024-11-12"
+
+[[kv_namespaces]]
+binding = "JUMP_CONFIG"
+id = "0f2627bd295f43d4b475741e1383bba7"

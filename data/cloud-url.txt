@@ -1,1 +1,1 @@
-https://jsonblob.com/api/jsonBlob/019fdbf2-7e9c-797c-b88a-1610d743ae91
+https://jumpl-config.haizeiym.workers.dev/config

@@ -59,30 +59,59 @@ function parseCloudUrlFile(text: string): string | null {
   return line ?? null
 }
 
+/** 不稳定/会过期的第三方，禁止作为生产持久化源 */
+function isUnstableStoreUrl(url: string): boolean {
+  return /jsonblob\.com|jsonbin\.io|httpbin\.org|pastebin\.com/i.test(url)
+}
+
+function rememberCloudUrl(url: string | null) {
+  try {
+    if (url) localStorage.setItem(LS_CLOUD, url)
+    else localStorage.removeItem(LS_CLOUD)
+  } catch {
+    /* ignore */
+  }
+}
+
 /**
- * 全员必须同一地址：以站点 data/cloud-url.txt 为准（覆盖本机 localStorage，避免每人一份）
+ * 全员必须同一地址：以站点 data/cloud-url.txt 为准。
+ * 拒绝 jsonblob（会过期）；并清理本机缓存里的失效地址。
  */
 export async function resolveCloudUrl(): Promise<string | null> {
   const fromFile = await fetchText('/data/cloud-url.txt')
   if (fromFile) {
     const url = parseCloudUrlFile(fromFile)
     if (url) {
-      try {
-        localStorage.setItem(LS_CLOUD, url)
-      } catch {
-        /* ignore */
+      if (isUnstableStoreUrl(url)) {
+        console.warn('[resolveCloudUrl] 不稳定存储已忽略（禁止 jsonblob 等）', url)
+        rememberCloudUrl(null)
+        return null
       }
+      rememberCloudUrl(url)
       return url
     }
   }
 
-  // 仅当站点尚未部署 cloud-url 时，才用本机缓存（并提示不一致风险由保存/构建修复）
+  // 站点文件无有效地址时，才看本机缓存（同样拒绝不稳定源）
   try {
     const fromLs = localStorage.getItem(LS_CLOUD)
-    if (fromLs && /^https?:\/\//i.test(fromLs)) return fromLs
+    if (fromLs && /^https?:\/\//i.test(fromLs)) {
+      if (isUnstableStoreUrl(fromLs)) {
+        rememberCloudUrl(null)
+        return null
+      }
+      return fromLs
+    }
   } catch {
     /* ignore */
   }
+  return null
+}
+async function fetchLocalFallback(): Promise<JumpConfigFile | null> {
+  const local = await fetchJson('/data/jump-config.json')
+  if (local) return parseJumpConfig(local)
+  const root = await fetchJson('/jump-config.json')
+  if (root) return parseJumpConfig(root)
   return null
 }
 
@@ -97,19 +126,20 @@ export async function fetchGlobalConfig(): Promise<JumpConfigFile> {
   if (cloud) {
     const raw = await fetchJson(cloud)
     if (raw) return parseJumpConfig(raw)
-    throw new Error('云端配置读取失败，请检查网络或重新打包部署')
+    // 云端失效（如 jsonblob 404/过期）时回退静态文件，避免整站打不开
+    console.warn('[fetchGlobalConfig] 云端不可用，回退本地 jump-config.json', cloud)
+    const fallback = await fetchLocalFallback()
+    if (fallback) return fallback
+    throw new Error(
+      '云端配置读取失败。若仍使用 jsonblob，数据可能已过期；请按 README 部署 config-api（Cloudflare Worker）并更新 data/cloud-url.txt',
+    )
   }
 
-  // 无云端地址时退回静态文件（只读，且全员应相同）
-  const local = await fetchJson('/data/jump-config.json')
-  if (local) return parseJumpConfig(local)
+  const fallback = await fetchLocalFallback()
+  if (fallback) return fallback
 
-  const root = await fetchJson('/jump-config.json')
-  if (root) return parseJumpConfig(root)
-
-  throw new Error('无法加载配置：请重新执行 npm run build 并上传完整 dist')
+  throw new Error('无法加载配置：请确认已上传 dist，并配置持久化 data/cloud-url.txt')
 }
-
 export class ConfigConflictError extends Error {
   serverConfig: JumpConfigFile
 
@@ -144,7 +174,9 @@ async function putToCloud(
     items: config.items,
   }
 
-  const res = await fetch(cloudUrl, {
+  const putUrl = new URL(cloudUrl)
+  if (force) putUrl.searchParams.set('force', '1')
+  const res = await fetch(putUrl.toString(), {
     method: 'PUT',
     cache: 'no-store',
     headers: {
@@ -153,6 +185,23 @@ async function putToCloud(
     },
     body: JSON.stringify(next),
   })
+  if (res.status === 409) {
+    const data: unknown = await res.json()
+    let serverConfig: JumpConfigFile = { updatedAt: Date.now(), items: [] }
+    let message = '配置已被他人更新'
+    if (typeof data === 'object' && data !== null) {
+      const obj = data as { error?: unknown; serverConfig?: unknown }
+      if (typeof obj.error === 'string') message = obj.error
+      if (obj.serverConfig) {
+        try {
+          serverConfig = parseJumpConfig(obj.serverConfig)
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    throw new ConfigConflictError(message, serverConfig)
+  }
   if (!res.ok) throw new Error(await parseError(res))
 
   const again = await fetchJson(cloudUrl)
@@ -200,10 +249,16 @@ export async function saveGlobalConfig(
   const cloud = await resolveCloudUrl()
   if (!cloud) {
     throw new Error(
-      '缺少全员共用云端地址。请在项目里执行 npm run build（会生成 data/cloud-url.txt）后重新上传整个 dist',
+      '未配置稳定持久化 API。请按 README 部署 config-api（Cloudflare Worker + KV），将固定地址写入 data/cloud-url.txt 并上传。禁止使用 jsonblob 等会过期的服务',
     )
   }
 
-  const saved = await putToCloud(cloud, config, force)
-  return { config: saved }
+  try {
+    const saved = await putToCloud(cloud, config, force)
+    return { config: saved }
+  } catch (err) {
+    if (err instanceof ConfigConflictError) throw err
+    const msg = err instanceof Error ? err.message : '保存失败'
+    throw new Error(`${msg}。请确认 Worker 已部署且 cloud-url.txt 指向该 Worker（先导出备份）`)
+  }
 }
