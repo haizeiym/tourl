@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   ArrowDown,
+  Collection,
   DocumentAdd,
   Download,
   FolderOpened,
@@ -32,6 +33,8 @@ async function onFileChange(e: Event) {
 
 function onMoreCommand(cmd: string | number | object) {
   const key = String(cmd)
+  if (key === 'backup') void props.store.backupToKv()
+  if (key === 'lobby') props.store.addLobbyJump()
   if (key === 'newConfig') void props.store.newConfig()
   if (key === 'import') onPickFile()
   if (key === 'export') props.store.exportConfig()
@@ -60,13 +63,29 @@ function onMoreCommand(cmd: string | number | object) {
         保存到全局
       </el-button>
       <el-button
+        type="warning"
+        :icon="Upload"
+        :loading="store.savingLobby.value"
+        @click="store.saveLobbiesToGlobal()"
+      >
+        保存大厅全局
+      </el-button>
+      <el-button
         :icon="Refresh"
         :loading="store.loading.value"
         @click="store.refreshGlobal()"
       >
         刷新全局
       </el-button>
+      <el-button
+        :icon="Collection"
+        :loading="store.backingUp.value"
+        @click="store.backupToKv()"
+      >
+        备份
+      </el-button>
       <el-button type="primary" :icon="Plus" @click="store.addJump()">新建跳转</el-button>
+      <el-button type="warning" plain :icon="Plus" @click="store.addLobbyJump()">新建大厅</el-button>
       <el-button :icon="Link" @click="store.addJumpFromUrl()">根据 URL 添加</el-button>
       <el-button :icon="DocumentAdd" @click="store.newConfig()">新建配置</el-button>
       <el-button :icon="FolderOpened" @click="onPickFile">导入配置</el-button>
@@ -86,6 +105,15 @@ function onMoreCommand(cmd: string | number | object) {
           保存
         </el-button>
         <el-button
+          type="warning"
+          size="small"
+          :icon="Upload"
+          :loading="store.savingLobby.value"
+          @click="store.saveLobbiesToGlobal()"
+        >
+          大厅
+        </el-button>
+        <el-button
           size="small"
           :icon="Refresh"
           :loading="store.loading.value"
@@ -101,6 +129,8 @@ function onMoreCommand(cmd: string | number | object) {
           </el-button>
           <template #dropdown>
             <el-dropdown-menu>
+              <el-dropdown-item command="backup" :icon="Collection">备份</el-dropdown-item>
+              <el-dropdown-item command="lobby" :icon="Plus">新建大厅</el-dropdown-item>
               <el-dropdown-item command="fromUrl" :icon="Link">根据 URL 添加</el-dropdown-item>
               <el-dropdown-item command="newConfig" :icon="DocumentAdd">新建配置</el-dropdown-item>
               <el-dropdown-item command="import" :icon="FolderOpened">导入配置</el-dropdown-item>
@@ -115,6 +145,10 @@ function onMoreCommand(cmd: string | number | object) {
       v-if="store.dirty.value"
       class="shrink-0 text-xs text-amber-600"
     >未保存</span>
+    <span
+      v-if="store.lobbyDirty.value"
+      class="shrink-0 text-xs text-orange-600"
+    >大厅未保存</span>
 
     <input
       ref="fileInput"

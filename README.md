@@ -17,7 +17,14 @@ npx wrangler login
 
 cd config-api
 npx wrangler kv namespace create JUMP_CONFIG
-# 把输出的 id 填进 wrangler.toml 的 id =
+npx wrangler kv namespace create JUMP_LOBBY
+npx wrangler kv namespace create JUMP_CONFIG_BACKUP
+npx wrangler kv namespace create JUMP_LOBBY_BACKUP
+# 把四个输出的 id 分别填进 wrangler.toml：
+#   JUMP_CONFIG         → 跳转列表
+#   JUMP_LOBBY          → 大厅参数
+#   JUMP_CONFIG_BACKUP  → 列表备份
+#   JUMP_LOBBY_BACKUP   → 大厅备份
 
 cd ..
 npm run deploy:config-api

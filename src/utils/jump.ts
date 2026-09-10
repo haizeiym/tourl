@@ -1,4 +1,4 @@
-import type { JumpConfigFile, JumpItem, OpenMode } from '../types/jump'
+import type { JumpConfigFile, JumpItem, JumpKind, OpenMode } from '../types/jump'
 
 /** 非 HTTPS 页面无 crypto.randomUUID，需兜底 */
 export function createId(): string {
@@ -24,6 +24,7 @@ export function createId(): string {
 export function createJumpItem(): JumpItem {
   return {
     id: createId(),
+    kind: 'normal',
     openMode: 'tab',
     name: '未命名跳转',
     iconUrl: '',
@@ -58,6 +59,7 @@ export function createJumpItemFromUrl(raw: string): JumpItem {
 
   return {
     id: createId(),
+    kind: 'normal',
     openMode: 'tab',
     name: name.slice(0, 64) || '未命名跳转',
     iconUrl: '',
@@ -99,6 +101,10 @@ function isOpenMode(value: unknown): value is OpenMode {
   return value === 'tab' || value === 'iframe'
 }
 
+function isJumpKind(value: unknown): value is JumpKind {
+  return value === 'normal' || value === 'lobby'
+}
+
 function isStringRecord(value: unknown): value is Record<string, string> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false
@@ -117,23 +123,30 @@ function normalizeItem(raw: unknown, index: number): JumpItem {
   if (typeof obj.name !== 'string') {
     throw new Error(`第 ${index + 1} 项缺少 name`)
   }
-  if (typeof obj.url !== 'string') {
+
+  const kind: JumpKind = isJumpKind(obj.kind) ? obj.kind : 'normal'
+  const isLobby = kind === 'lobby'
+
+  if (!isLobby && typeof obj.url !== 'string') {
     throw new Error(`第 ${index + 1} 项缺少 url`)
   }
-  if (!isStringRecord(obj.args)) {
+  if (!isLobby && !isStringRecord(obj.args)) {
     throw new Error(`第 ${index + 1} 项 args 须为 Record<string, string>`)
   }
 
   const openMode: OpenMode = isOpenMode(obj.openMode) ? obj.openMode : 'tab'
   const iconUrl = typeof obj.iconUrl === 'string' ? obj.iconUrl : ''
+  const url = typeof obj.url === 'string' ? obj.url : ''
+  const args = isStringRecord(obj.args) ? { ...obj.args } : {}
 
   return {
     id: obj.id,
+    kind,
     openMode,
     name: obj.name,
     iconUrl,
-    url: obj.url,
-    args: { ...obj.args },
+    url,
+    args,
   }
 }
 

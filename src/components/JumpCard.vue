@@ -36,9 +36,13 @@ const showImg = () => Boolean(props.item.iconUrl) && !imgFailed.value
     @click="emit('select', item.id)"
   >
     <div
-      class="flex shrink-0 items-center justify-center overflow-hidden rounded-xl bg-slate-100 font-semibold text-slate-600"
+      class="relative flex shrink-0 items-center justify-center overflow-hidden rounded-xl bg-slate-100 font-semibold text-slate-600"
       :class="compact ? 'h-12 w-12 text-lg' : 'h-16 w-16 text-xl'"
     >
+      <span
+        v-if="item.kind === 'lobby'"
+        class="absolute -right-0.5 -top-0.5 rounded bg-amber-500 px-1 text-[10px] font-bold leading-4 text-white"
+      >大厅</span>
       <img
         v-if="showImg()"
         :src="item.iconUrl"

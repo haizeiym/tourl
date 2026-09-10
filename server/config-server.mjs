@@ -6,6 +6,10 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..')
 const DATA_FILE = path.join(ROOT, 'data', 'jump-config.json')
+const LOBBY_DIR = path.join(ROOT, 'data', 'lobby')
+const BACKUP_DIR = path.join(ROOT, 'data', 'backup')
+const BACKUP_CONFIG = path.join(BACKUP_DIR, 'jump-config.json')
+const BACKUP_LOBBY_DIR = path.join(BACKUP_DIR, 'lobby')
 const DIST_DIR = path.join(ROOT, 'dist')
 const PORT = Number(process.env.PORT || 8787)
 const SERVE_STATIC = process.env.SERVE_STATIC === '1'
@@ -49,11 +53,90 @@ function sendJson(res, status, body, extraHeaders = {}) {
     'Cache-Control': 'no-store, no-cache, must-revalidate',
     Pragma: 'no-cache',
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET,PUT,OPTIONS',
+    'Access-Control-Allow-Methods': 'GET,PUT,POST,DELETE,OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     ...extraHeaders,
   })
   res.end(data)
+}
+
+function lobbyFile(id) {
+  const safe = String(id).replace(/[^a-zA-Z0-9._-]/g, '_')
+  return path.join(LOBBY_DIR, `${safe}.json`)
+}
+
+async function readLobby(id) {
+  const text = await fs.readFile(lobbyFile(id), 'utf8')
+  return JSON.parse(text)
+}
+
+async function writeLobby(id, body) {
+  await fs.mkdir(LOBBY_DIR, { recursive: true })
+  const file = lobbyFile(id)
+  const tmp = `${file}.tmp`
+  await fs.writeFile(tmp, JSON.stringify(body, null, 2), 'utf8')
+  await fs.rename(tmp, file)
+}
+
+async function deleteLobby(id) {
+  try {
+    await fs.unlink(lobbyFile(id))
+  } catch (err) {
+    if (err && typeof err === 'object' && 'code' in err && err.code === 'ENOENT') {
+      return
+    }
+    throw err
+  }
+}
+
+function parseLobbyId(pathname) {
+  const m = pathname.match(/^\/api\/lobby\/([^/]+)\/?$/)
+  if (!m) return null
+  try {
+    return decodeURIComponent(m[1])
+  } catch {
+    return m[1]
+  }
+}
+
+async function snapshotLocalBackup() {
+  await fs.mkdir(BACKUP_LOBBY_DIR, { recursive: true })
+  const config = await readConfig()
+  await fs.writeFile(BACKUP_CONFIG, JSON.stringify(config, null, 2), 'utf8')
+
+  let names = []
+  try {
+    names = await fs.readdir(LOBBY_DIR)
+  } catch (err) {
+    if (!(err && typeof err === 'object' && 'code' in err && err.code === 'ENOENT')) {
+      throw err
+    }
+  }
+
+  const jsonFiles = names.filter((n) => n.endsWith('.json'))
+  const destNames = await fs.readdir(BACKUP_LOBBY_DIR).catch(() => [])
+  for (const n of destNames) {
+    if (n.endsWith('.json') && !jsonFiles.includes(n)) {
+      await fs.unlink(path.join(BACKUP_LOBBY_DIR, n))
+    }
+  }
+  for (const n of jsonFiles) {
+    const src = path.join(LOBBY_DIR, n)
+    const dest = path.join(BACKUP_LOBBY_DIR, n)
+    await fs.copyFile(src, dest)
+  }
+
+  const backedAt = Date.now()
+  await fs.writeFile(
+    path.join(BACKUP_DIR, 'meta.json'),
+    JSON.stringify(
+      { ok: true, backedAt, configKeys: 1, lobbyKeys: jsonFiles.length },
+      null,
+      2,
+    ),
+    'utf8',
+  )
+  return { ok: true, backedAt, configKeys: 1, lobbyKeys: jsonFiles.length }
 }
 
 function readBody(req) {
@@ -119,10 +202,53 @@ const server = http.createServer(async (req, res) => {
     if (method === 'OPTIONS') {
       res.writeHead(204, {
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET,PUT,OPTIONS',
+        'Access-Control-Allow-Methods': 'GET,PUT,POST,DELETE,OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type',
       })
       res.end()
+      return
+    }
+
+    const lobbyId = parseLobbyId(url.pathname)
+    if (lobbyId) {
+      if (method === 'GET') {
+        try {
+          const lobby = await readLobby(lobbyId)
+          sendJson(res, 200, lobby)
+        } catch (err) {
+          if (err && typeof err === 'object' && 'code' in err && err.code === 'ENOENT') {
+            sendJson(res, 404, { error: '大厅配置不存在' })
+            return
+          }
+          throw err
+        }
+        return
+      }
+      if (method === 'PUT') {
+        const body = await readBody(req)
+        if (!body || typeof body !== 'object') {
+          sendJson(res, 400, { error: 'body 须为对象' })
+          return
+        }
+        await writeLobby(lobbyId, body)
+        console.log(`[lobby] saved id=${lobbyId}`)
+        sendJson(res, 200, body)
+        return
+      }
+      if (method === 'DELETE') {
+        await deleteLobby(lobbyId)
+        console.log(`[lobby] deleted id=${lobbyId}`)
+        sendJson(res, 200, { ok: true })
+        return
+      }
+      sendJson(res, 405, { error: 'Method Not Allowed' })
+      return
+    }
+
+    if ((url.pathname === '/api/backup' || url.pathname === '/backup') && method === 'POST') {
+      const result = await snapshotLocalBackup()
+      console.log(`[backup] configKeys=${result.configKeys} lobbyKeys=${result.lobbyKeys}`)
+      sendJson(res, 200, result)
       return
     }
 

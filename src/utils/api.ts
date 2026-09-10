@@ -1,5 +1,6 @@
-import type { JumpConfigFile } from '../types/jump'
+import type { JumpConfigFile, LobbyConfig } from '../types/jump'
 import { parseJumpConfig } from './jump'
+import { parseLobbyConfig } from './lobby'
 
 const LS_CLOUD = 'jumpl.cloudConfigUrl'
 
@@ -261,4 +262,137 @@ export async function saveGlobalConfig(
     const msg = err instanceof Error ? err.message : '保存失败'
     throw new Error(`${msg}。请确认 Worker 已部署且 cloud-url.txt 指向该 Worker（先导出备份）`)
   }
+}
+
+/** 由 cloud-url（.../config）推导大厅项地址 .../lobby/:id */
+function lobbyApiUrl(itemId: string, cloudConfigUrl: string): string {
+  const u = new URL(cloudConfigUrl)
+  const basePath = u.pathname.replace(/\/config\/?$/, '')
+  u.pathname = `${basePath}/lobby/${encodeURIComponent(itemId)}`
+  u.search = ''
+  u.hash = ''
+  return u.toString()
+}
+
+export async function fetchLobbyConfig(itemId: string): Promise<LobbyConfig | null> {
+  if (import.meta.env.DEV) {
+    const raw = await fetchJson(`/api/lobby/${encodeURIComponent(itemId)}`)
+    if (!raw) return null
+    try {
+      return parseLobbyConfig(raw)
+    } catch (err) {
+      console.warn('[fetchLobbyConfig] parse failed', err)
+      return null
+    }
+  }
+
+  const cloud = await resolveCloudUrl()
+  if (!cloud) return null
+  const raw = await fetchJson(lobbyApiUrl(itemId, cloud))
+  if (!raw) return null
+  try {
+    return parseLobbyConfig(raw)
+  } catch (err) {
+    console.warn('[fetchLobbyConfig] parse failed', err)
+    return null
+  }
+}
+
+export async function saveLobbyConfig(
+  itemId: string,
+  lobby: LobbyConfig,
+): Promise<LobbyConfig> {
+  const body = JSON.stringify(lobby)
+
+  if (import.meta.env.DEV) {
+    const res = await fetch(`/api/lobby/${encodeURIComponent(itemId)}`, {
+      method: 'PUT',
+      cache: 'no-store',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body,
+    })
+    if (!res.ok) throw new Error(await parseError(res))
+    return parseLobbyConfig(await res.json())
+  }
+
+  const cloud = await resolveCloudUrl()
+  if (!cloud) {
+    throw new Error('未配置稳定持久化 API，无法保存大厅参数')
+  }
+  const res = await fetch(lobbyApiUrl(itemId, cloud), {
+    method: 'PUT',
+    cache: 'no-store',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body,
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  return parseLobbyConfig(await res.json())
+}
+
+export async function deleteLobbyConfig(itemId: string): Promise<void> {
+  if (import.meta.env.DEV) {
+    const res = await fetch(`/api/lobby/${encodeURIComponent(itemId)}`, {
+      method: 'DELETE',
+      cache: 'no-store',
+    })
+    if (!res.ok && res.status !== 404) throw new Error(await parseError(res))
+    return
+  }
+
+  const cloud = await resolveCloudUrl()
+  if (!cloud) return
+  const res = await fetch(lobbyApiUrl(itemId, cloud), {
+    method: 'DELETE',
+    cache: 'no-store',
+  })
+  if (!res.ok && res.status !== 404) throw new Error(await parseError(res))
+}
+
+export type BackupResult = {
+  ok: boolean
+  backedAt: number
+  configKeys: number
+  lobbyKeys: number
+}
+
+function backupApiUrl(cloudConfigUrl: string): string {
+  const u = new URL(cloudConfigUrl)
+  const basePath = u.pathname.replace(/\/config\/?$/, '')
+  u.pathname = `${basePath}/backup`
+  u.search = ''
+  u.hash = ''
+  return u.toString()
+}
+
+/** 把 JUMP_CONFIG / JUMP_LOBBY 全量快照到独立备份 KV（开发写 data/backup） */
+export async function backupGlobalStores(): Promise<BackupResult> {
+  const parse = async (res: Response): Promise<BackupResult> => {
+    if (!res.ok) throw new Error(await parseError(res))
+    const data: unknown = await res.json()
+    if (typeof data !== 'object' || data === null) {
+      throw new Error('备份返回无效')
+    }
+    const obj = data as Record<string, unknown>
+    return {
+      ok: obj.ok === true,
+      backedAt: typeof obj.backedAt === 'number' ? obj.backedAt : Date.now(),
+      configKeys: typeof obj.configKeys === 'number' ? obj.configKeys : 0,
+      lobbyKeys: typeof obj.lobbyKeys === 'number' ? obj.lobbyKeys : 0,
+    }
+  }
+
+  if (import.meta.env.DEV) {
+    const res = await fetch('/api/backup', { method: 'POST', cache: 'no-store' })
+    return parse(res)
+  }
+
+  const cloud = await resolveCloudUrl()
+  if (!cloud) {
+    throw new Error('未配置稳定持久化 API，无法备份')
+  }
+  const res = await fetch(backupApiUrl(cloud), {
+    method: 'POST',
+    cache: 'no-store',
+  })
+  return parse(res)
 }

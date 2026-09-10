@@ -1,10 +1,14 @@
-import { computed, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { JumpConfigFile, JumpItem } from '../types/jump'
+import type { JumpConfigFile, JumpItem, LobbyConfig } from '../types/jump'
 import {
   ConfigConflictError,
+  backupGlobalStores,
+  deleteLobbyConfig,
   fetchGlobalConfig,
+  fetchLobbyConfig,
   saveGlobalConfig,
+  saveLobbyConfig,
 } from '../utils/api'
 import {
   buildJumpUrl,
@@ -16,25 +20,47 @@ import {
   isHttpUrl,
   parseJumpConfig,
 } from '../utils/jump'
+import {
+  createDefaultLobbyConfig,
+  createLobbyJumpItem,
+  executeLobbyJump,
+  parseLobbyConfig,
+} from '../utils/lobby'
 
 export function useJumpStore() {
   const config = ref<JumpConfigFile>(createEmptyConfig())
   const selectedId = ref<string | null>(null)
   const dirty = ref(false)
+  const lobbyDirty = ref(false)
   const iframeSrc = ref<string | null>(null)
   const focusNameToken = ref(0)
   const loading = ref(false)
   const saving = ref(false)
+  const savingLobby = ref(false)
+  const backingUp = ref(false)
+  const jumping = ref(false)
+  /** 大厅参数内存缓存（权威持久化在独立 KV / 本地 lobby 文件） */
+  const lobbyById = reactive<Record<string, LobbyConfig>>({})
 
   const selectedItem = computed(() => {
     if (!selectedId.value) return null
     return config.value.items.find((i) => i.id === selectedId.value) ?? null
   })
 
+  const selectedLobby = computed(() => {
+    const item = selectedItem.value
+    if (!item || item.kind !== 'lobby') return null
+    return lobbyById[item.id] ?? null
+  })
+
   const isIframePreview = computed(() => iframeSrc.value !== null)
 
   function markDirty() {
     dirty.value = true
+  }
+
+  function markLobbyDirty() {
+    lobbyDirty.value = true
   }
 
   function selectItem(id: string) {
@@ -59,6 +85,39 @@ export function useJumpStore() {
     }
   }
 
+  function clearLobbyCache() {
+    for (const key of Object.keys(lobbyById)) {
+      delete lobbyById[key]
+    }
+  }
+
+  async function hydrateLobbies(items: JumpItem[]) {
+    clearLobbyCache()
+    const lobbyItems = items.filter((i) => i.kind === 'lobby')
+    await Promise.all(
+      lobbyItems.map(async (item) => {
+        try {
+          const remote = await fetchLobbyConfig(item.id)
+          lobbyById[item.id] = remote ?? createDefaultLobbyConfig()
+        } catch (err) {
+          console.warn('[hydrateLobbies]', item.id, err)
+          lobbyById[item.id] = createDefaultLobbyConfig()
+        }
+      }),
+    )
+  }
+
+  async function persistLobbies(items: JumpItem[]) {
+    const lobbyItems = items.filter((i) => i.kind === 'lobby')
+    await Promise.all(
+      lobbyItems.map(async (item) => {
+        const lobby = lobbyById[item.id] ?? createDefaultLobbyConfig()
+        lobbyById[item.id] = lobby
+        await saveLobbyConfig(item.id, lobby)
+      }),
+    )
+  }
+
   function applyConfig(next: JumpConfigFile, clearDirty = true) {
     config.value = next
     selectedId.value = null
@@ -75,6 +134,8 @@ export function useJumpStore() {
     try {
       const remote = await fetchGlobalConfig()
       applyConfig(remote)
+      await hydrateLobbies(remote.items)
+      lobbyDirty.value = false
       ElMessage.success(`已加载全局配置（${remote.items.length} 项）`)
     } catch (err) {
       console.error('[loadGlobalConfig]', err)
@@ -95,7 +156,7 @@ export function useJumpStore() {
       const result = await saveGlobalConfig(config.value, force)
       config.value = result.config
       dirty.value = false
-      ElMessage.success('已保存到全局配置')
+      ElMessage.success('已保存到全局配置（不含大厅参数）')
     } catch (err) {
       console.error('[saveToGlobal]', err)
       if (err instanceof ConfigConflictError) {
@@ -123,14 +184,49 @@ export function useJumpStore() {
     }
   }
 
+  async function saveLobbiesToGlobal() {
+    const lobbyItems = config.value.items.filter((i) => i.kind === 'lobby')
+    if (lobbyItems.length === 0) {
+      ElMessage.warning('当前没有大厅项可保存')
+      return
+    }
+    savingLobby.value = true
+    try {
+      await persistLobbies(lobbyItems)
+      lobbyDirty.value = false
+      ElMessage.success(`已保存 ${lobbyItems.length} 条大厅参数到独立 KV`)
+    } catch (err) {
+      console.error('[saveLobbiesToGlobal]', err)
+      const msg = err instanceof Error ? err.message : '保存失败'
+      ElMessage.error(`保存大厅失败：${msg}`)
+    } finally {
+      savingLobby.value = false
+    }
+  }
+
+  async function backupToKv() {
+    backingUp.value = true
+    try {
+      const result = await backupGlobalStores()
+      ElMessage.success(
+        `已备份到独立 KV（配置 ${result.configKeys} 键 / 大厅 ${result.lobbyKeys} 键）`,
+      )
+    } catch (err) {
+      console.error('[backupToKv]', err)
+      ElMessage.error(err instanceof Error ? err.message : '备份失败')
+    } finally {
+      backingUp.value = false
+    }
+  }
+
   async function newConfig() {
     const ok = await confirmDiscardIfNeeded()
     if (!ok) return
-    // 保留已知 updatedAt，便于之后保存时走冲突检测
     config.value = {
       updatedAt: config.value.updatedAt,
       items: [],
     }
+    clearLobbyCache()
     selectedId.value = null
     dirty.value = true
     closeIframe()
@@ -147,6 +243,22 @@ export function useJumpStore() {
     } catch (err) {
       console.error('[addJump]', err)
       ElMessage.error(err instanceof Error ? err.message : '新建跳转失败')
+    }
+  }
+
+  function addLobbyJump() {
+    try {
+      const { item, lobby } = createLobbyJumpItem()
+      config.value.items.push(item)
+      lobbyById[item.id] = lobby
+      selectedId.value = item.id
+      markDirty()
+      markLobbyDirty()
+      focusNameToken.value += 1
+      ElMessage.success('已新建大厅（列表点「保存到全局」，参数点「保存大厅全局」）')
+    } catch (err) {
+      console.error('[addLobbyJump]', err)
+      ElMessage.error(err instanceof Error ? err.message : '新建大厅跳转失败')
     }
   }
 
@@ -188,13 +300,49 @@ export function useJumpStore() {
       const text = await file.text()
       const raw: unknown = JSON.parse(text)
       const parsed = parseJumpConfig(raw)
-      // 导入只改内存；保留当前服务端版本戳，避免误覆盖时跳过冲突检测
+      // 导入可附带 lobbies 映射，或 item.lobby 兜底
+      clearLobbyCache()
+      if (typeof raw === 'object' && raw !== null && 'lobbies' in raw) {
+        const map = (raw as { lobbies?: unknown }).lobbies
+        if (map && typeof map === 'object') {
+          for (const [id, value] of Object.entries(map as Record<string, unknown>)) {
+            try {
+              lobbyById[id] = parseLobbyConfig(value)
+            } catch {
+              /* skip */
+            }
+          }
+        }
+      }
+      for (const item of parsed.items) {
+        if (item.kind !== 'lobby') continue
+        if (lobbyById[item.id]) continue
+        const embedded =
+          typeof raw === 'object' &&
+          raw !== null &&
+          Array.isArray((raw as { items?: unknown[] }).items)
+            ? ((raw as { items: Array<Record<string, unknown>> }).items.find(
+                (i) => i && i.id === item.id,
+              ) as Record<string, unknown> | undefined)
+            : undefined
+        if (embedded && embedded.lobby) {
+          try {
+            lobbyById[item.id] = parseLobbyConfig(embedded.lobby)
+            continue
+          } catch {
+            /* fallthrough */
+          }
+        }
+        lobbyById[item.id] = createDefaultLobbyConfig()
+      }
+
       applyConfig(
         { updatedAt: config.value.updatedAt, items: parsed.items },
         false,
       )
       dirty.value = true
-      ElMessage.success(`导入成功，共 ${parsed.items.length} 项（需保存到全局才同步）`)
+      if (parsed.items.some((i) => i.kind === 'lobby')) lobbyDirty.value = true
+      ElMessage.success(`导入成功，共 ${parsed.items.length} 项（列表/大厅需分别保存到全局）`)
     } catch (err) {
       console.error('[importConfig]', err)
       const msg = err instanceof Error ? err.message : '文件格式无效'
@@ -204,8 +352,17 @@ export function useJumpStore() {
 
   function exportConfig() {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-    downloadJson(`jump-config-${stamp}.json`, config.value)
-    ElMessage.success('已导出本地备份')
+    const lobbies: Record<string, LobbyConfig> = {}
+    for (const item of config.value.items) {
+      if (item.kind === 'lobby' && lobbyById[item.id]) {
+        lobbies[item.id] = lobbyById[item.id]!
+      }
+    }
+    downloadJson(`jump-config-${stamp}.json`, {
+      ...config.value,
+      lobbies,
+    })
+    ElMessage.success('已导出本地备份（含大厅参数）')
   }
 
   function updateSelected(patch: Partial<JumpItem>) {
@@ -222,6 +379,22 @@ export function useJumpStore() {
     markDirty()
   }
 
+  function updateSelectedLobby(patch: Partial<LobbyConfig>) {
+    const item = selectedItem.value
+    if (!item || item.kind !== 'lobby') return
+    const current = lobbyById[item.id] ?? createDefaultLobbyConfig()
+    lobbyById[item.id] = { ...current, ...patch }
+    markLobbyDirty()
+  }
+
+  function resetSelectedLobby() {
+    const item = selectedItem.value
+    if (!item || item.kind !== 'lobby') return
+    lobbyById[item.id] = createDefaultLobbyConfig()
+    markLobbyDirty()
+    ElMessage.success('已重置大厅默认参数')
+  }
+
   function duplicateSelected() {
     const source = selectedItem.value
     if (!source) {
@@ -231,11 +404,20 @@ export function useJumpStore() {
     try {
       const copy: JumpItem = {
         id: createId(),
+        kind: source.kind ?? 'normal',
         openMode: source.openMode,
         name: `${source.name} 副本`.slice(0, 64),
         iconUrl: source.iconUrl,
         url: source.url,
         args: { ...source.args },
+      }
+      if (copy.kind === 'lobby') {
+        const srcLobby = lobbyById[source.id] ?? createDefaultLobbyConfig()
+        lobbyById[copy.id] = {
+          ...srcLobby,
+          uuid: srcLobby.uuid,
+          nickname: srcLobby.nickname,
+        }
       }
       const index = config.value.items.findIndex((i) => i.id === source.id)
       if (index >= 0) {
@@ -245,6 +427,7 @@ export function useJumpStore() {
       }
       selectedId.value = copy.id
       markDirty()
+      if (copy.kind === 'lobby') markLobbyDirty()
       focusNameToken.value += 1
       ElMessage.success('已复制当前配置')
     } catch (err) {
@@ -266,8 +449,17 @@ export function useJumpStore() {
       return
     }
     const id = item.id
+    const wasLobby = item.kind === 'lobby'
     config.value.items = config.value.items.filter((i) => i.id !== id)
     if (selectedId.value === id) selectedId.value = null
+    if (wasLobby) {
+      delete lobbyById[id]
+      try {
+        await deleteLobbyConfig(id)
+      } catch (err) {
+        console.warn('[deleteSelected] lobby kv', err)
+      }
+    }
     markDirty()
     ElMessage.success('已删除')
   }
@@ -276,9 +468,32 @@ export function useJumpStore() {
     iframeSrc.value = null
   }
 
-  function jumpSelected() {
+  async function jumpSelected() {
     const item = selectedItem.value
     if (!item) return
+
+    if (item.kind === 'lobby') {
+      const lobby = lobbyById[item.id] ?? createDefaultLobbyConfig()
+      jumping.value = true
+      try {
+        const { finalUrl } = await executeLobbyJump(lobby)
+        if (item.openMode === 'iframe') {
+          iframeSrc.value = finalUrl
+          return
+        }
+        const win = window.open(finalUrl, '_blank', 'noopener,noreferrer')
+        if (!win) {
+          ElMessage.warning('弹窗被拦截，请允许本站打开新标签页')
+        }
+      } catch (err) {
+        console.error('[jumpSelected] lobby', err)
+        ElMessage.error(err instanceof Error ? err.message : '大厅跳转失败')
+      } finally {
+        jumping.value = false
+      }
+      return
+    }
+
     if (!isHttpUrl(item.url)) {
       ElMessage.error('请填写有效的 http(s) 地址')
       return
@@ -308,23 +523,34 @@ export function useJumpStore() {
     config,
     selectedId,
     selectedItem,
+    selectedLobby,
     dirty,
+    lobbyDirty,
     iframeSrc,
     isIframePreview,
     focusNameToken,
     loading,
     saving,
+    savingLobby,
+    backingUp,
+    jumping,
+    lobbyById,
     selectItem,
     clearSelection,
     loadGlobalConfig,
     refreshGlobal,
     saveToGlobal,
+    saveLobbiesToGlobal,
+    backupToKv,
     newConfig,
     addJump,
+    addLobbyJump,
     addJumpFromUrl,
     importConfig,
     exportConfig,
     updateSelected,
+    updateSelectedLobby,
+    resetSelectedLobby,
     setArgs,
     duplicateSelected,
     deleteSelected,

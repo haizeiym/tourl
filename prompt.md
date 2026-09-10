@@ -469,3 +469,71 @@ public/data/jump-config.json
 5. 实现生产 `api.ts`（resolveCloudUrl / 冲突 / 强制覆盖 / 不稳定地址拦截）
 6. 补移动端适配与 README
 7. 对照 §六验收清单逐项自测；全部勾选后再交付
+
+
+# 九、中间 Grid 特殊 items（大厅跳转）
+
+在保持 §一～§八 既有普通跳转功能不变的前提下，增加「大厅」特殊项。
+
+## 9.1 标识
+
+- `JumpItem.kind`: `'normal' | 'lobby'`（缺省 `normal`，兼容旧配置）
+- Grid 卡片与 Inspector 对 `lobby` 显示「大厅」标识
+- TopBar 提供「新建大厅」；移动端在「更多」中
+
+## 9.2 存储（独立 KV 命名空间，禁止与全局配置共用）
+
+- 全局列表仍存 `JumpConfigFile`（普通字段：`id/kind/openMode/name/iconUrl/url/args`）
+- **大厅参数不进主配置 JSON，也不得写入 `JUMP_CONFIG`**，必须使用**另一个 KV 命名空间**：
+  - 生产：Worker binding `JUMP_LOBBY`（独立 namespace）；key = `lobby:{itemId}`；HTTP：`GET/PUT/DELETE /lobby/:id`
+  - 开发：本地 `data/lobby/{id}.json`；HTTP：`/api/lobby/:id`
+- TopBar **两个保存按钮，互不代写**：
+  - 「保存到全局」→ 只写 `JUMP_CONFIG`（跳转列表）
+  - 「保存大厅全局」→ 只写 `JUMP_LOBBY`（大厅参数）
+- 「刷新全局」时：加载主配置后 hydrate 各 lobby 项
+- 导出 JSON 可附带 `lobbies` 映射以便备份；导入时还原
+
+## 9.3 Inspector（对齐 deploy_lobby 参数面板）
+
+大厅项右侧面板字段：
+
+| 分组 | 字段 |
+|------|------|
+| 服务器 | `api_protocol`, `server`, `appKey`, `path` |
+| 用户 | `uuid`, `nickname`, `session` |
+| 业务 | `channel_id`, `merchant_id`, `game_id`, `redirect_protocol`, `game_redirect` |
+
+提供「重置大厅默认参数」。普通项仍用 URL + args 面板。
+
+## 9.4 跳转算法（对齐 deploy_lobby 点击逻辑）
+
+1. 组装 params：`channel_id/merchant_id/game_id/uuid/nickname/session` + `timestamp`(秒) + `nonce`(随机串)
+2. `Sign = HMAC-SHA256(hex)`，原文 = `path + '?' + 排序后的 flatten query`，密钥 = `appKey`
+3. `POST {api_protocol}://{server}{path}`，Header `Sign`，body JSON
+4. 成功且有 `data.game_url`：取该 URL 的 searchParams，拼到  
+   `game_redirect`（若无 `://` 则加 `redirect_protocol://`）后打开（tab / iframe 同普通项）
+
+## 9.5 验收补充
+
+- [ ] 大厅参数写入独立 KV `JUMP_LOBBY`，不写入 `JUMP_CONFIG`
+- [ ] 「保存到全局」与「保存大厅全局」互不代写
+- [ ] Grid 大厅项有可见标识
+- [ ] 跳转走登录签名算法，非简单 URL 拼接
+- [ ] 普通项行为与改造前一致
+
+## 10 备份（独立 KV 快照）
+
+1. 两个新 KV（禁止复用 `JUMP_CONFIG` / `JUMP_LOBBY`）：
+   - `JUMP_CONFIG_BACKUP` ← 快照 `JUMP_CONFIG` 全部 key
+   - `JUMP_LOBBY_BACKUP` ← 快照 `JUMP_LOBBY` 全部 key
+2. TopBar 增加「备份」按钮（移动端在「更多」）
+3. 点击后 **同时** 备份两份内容：`POST /backup`（开发 `POST /api/backup`）
+   - 覆盖同名 key；删除备份库中源库已不存在的 key
+   - 不改写生产 `JUMP_CONFIG` / `JUMP_LOBBY`
+4. 开发环境写入 `data/backup/`（与生产语义等价）
+
+验收：
+
+- [ ] wrangler 绑定 4 个 namespace：CONFIG / LOBBY / CONFIG_BACKUP / LOBBY_BACKUP
+- [ ] 点「备份」后两份备份 KV 与源内容一致
+- [ ] 备份失败不影响线上主库

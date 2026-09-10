@@ -1,0 +1,812 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <title>五龙面板</title>
+        <meta
+            name="viewport"
+            content="width=device-width,user-scalable=no,initial-scale=1,minimum-scale=1,maximum-scale=1,minimal-ui=true"
+        />
+    </head>
+    <body>
+        <div id="gameLobby">
+            <style>
+                #gameLobby {
+                        width: 100%;
+                        height: 100vh;
+                        overflow: hidden;
+                      }
+
+                      #gameLobby .lobby-wrapper {
+                        display: flex;
+                        flex-direction: column;
+                        justify-content: center;
+                        align-items: center;
+                        width: 100%;
+                        height: 100%;
+                        padding: 40px 20px;
+                        box-sizing: border-box;
+                        background:
+                          radial-gradient(ellipse at 20% 80%, rgba(120, 0, 255, 0.15) 0%, transparent 50%),
+                          radial-gradient(ellipse at 80% 20%, rgba(255, 0, 128, 0.12) 0%, transparent 50%),
+                          radial-gradient(ellipse at 50% 50%, rgba(0, 200, 255, 0.08) 0%, transparent 60%),
+                          linear-gradient(180deg, #0d0d1a 0%, #1a1a2e 40%, #16213e 70%, #0f3460 100%);
+                        font-family: 'Segoe UI', Arial, sans-serif;
+                        position: relative;
+                      }
+
+                      #gameLobby .lobby-wrapper::before {
+                        content: '';
+                        position: absolute;
+                        top: 0;
+                        left: 0;
+                        right: 0;
+                        bottom: 0;
+                        background-image:
+                          radial-gradient(2px 2px at 20px 30px, rgba(255,255,255,0.3), transparent),
+                          radial-gradient(2px 2px at 40px 70px, rgba(255,255,255,0.2), transparent),
+                          radial-gradient(1px 1px at 90px 40px, rgba(255,255,255,0.4), transparent),
+                          radial-gradient(2px 2px at 130px 80px, rgba(255,255,255,0.2), transparent),
+                          radial-gradient(1px 1px at 160px 120px, rgba(255,255,255,0.3), transparent);
+                        background-size: 200px 150px;
+                        animation: twinkle 4s ease-in-out infinite;
+                        pointer-events: none;
+                      }
+
+                      @keyframes twinkle {
+                        0%, 100% { opacity: 0.5; }
+                        50% { opacity: 1; }
+                      }
+
+                      #gameLobby .lobby-title {
+                        color: #ffd700;
+                        font-size: 36px;
+                        font-weight: bold;
+                        margin-bottom: 50px;
+                        text-shadow:
+                          0 0 10px rgba(255, 215, 0, 0.8),
+                          0 0 30px rgba(255, 215, 0, 0.4),
+                          0 0 50px rgba(255, 215, 0, 0.2);
+                        letter-spacing: 4px;
+                        position: relative;
+                        z-index: 1;
+                      }
+
+                      @media (max-width: 480px) {
+                        #gameLobby .lobby-title {
+                          font-size: 24px;
+                          margin-bottom: 30px;
+                          letter-spacing: 2px;
+                        }
+                      }
+
+                      #gameLobby .game-container {
+                        display: flex;
+                        flex-wrap: wrap;
+                        gap: 30px;
+                        justify-content: center;
+                        position: relative;
+                        z-index: 1;
+                      }
+
+                      #gameLobby .game-container > .config-toggle {
+                        position: absolute;
+                        top: -50px;
+                        right: 0px;
+                      }
+
+                      #gameLobby .game {
+                        width: 180px;
+                        height: 220px;
+                        background: linear-gradient(145deg, rgba(40, 50, 80, 0.9), rgba(25, 35, 60, 0.95));
+                        border: 1px solid rgba(255, 215, 0, 0.2);
+                        border-radius: 20px;
+                        display: flex;
+                        flex-direction: column;
+                        justify-content: center;
+                        align-items: center;
+                        cursor: pointer;
+                        box-shadow:
+                          0 10px 40px rgba(0, 0, 0, 0.5),
+                          inset 0 1px 0 rgba(255, 255, 255, 0.1),
+                          0 0 20px rgba(255, 215, 0, 0.1);
+                        transition: all 0.3s ease;
+                        color: #fff;
+                        position: relative;
+                        overflow: hidden;
+                        backdrop-filter: blur(10px);
+                      }
+
+                      #gameLobby .game::before {
+                        content: '';
+                        position: absolute;
+                        top: -50%;
+                        left: -50%;
+                        width: 200%;
+                        height: 200%;
+                        background: conic-gradient(from 0deg, transparent, rgba(255, 215, 0, 0.1), transparent 30%);
+                        animation: rotate 6s linear infinite;
+                        opacity: 0;
+                        transition: opacity 0.3s ease;
+                      }
+
+                      @keyframes rotate {
+                        100% { transform: rotate(360deg); }
+                      }
+
+                      #gameLobby .game:hover {
+                        transform: translateY(-10px) scale(1.05);
+                        border-color: rgba(255, 215, 0, 0.5);
+                        box-shadow:
+                          0 20px 60px rgba(0, 0, 0, 0.6),
+                          inset 0 1px 0 rgba(255, 255, 255, 0.2),
+                          0 0 40px rgba(255, 215, 0, 0.3);
+                      }
+
+                      #gameLobby .game:hover::before {
+                        opacity: 1;
+                      }
+
+                      #gameLobby .game:active {
+                        transform: translateY(-5px) scale(1.02);
+                      }
+
+                      #gameLobby .game-icon {
+                        font-size: 56px;
+                        margin-bottom: 16px;
+                        filter: drop-shadow(0 0 10px rgba(255, 215, 0, 0.5));
+                      }
+
+                      #gameLobby .game span {
+                        font-weight: 600;
+                        font-size: 16px;
+                        text-align: center;
+                        padding: 0 10px;
+                        position: relative;
+                        z-index: 1;
+                        text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+                      }
+
+                      #gameLobby .game-badge {
+                        position: absolute;
+                        top: 12px;
+                        right: 12px;
+                        background: linear-gradient(135deg, #ff4757, #ff6b81);
+                        color: #fff;
+                        font-size: 11px;
+                        padding: 5px 10px;
+                        border-radius: 20px;
+                        font-weight: bold;
+                        box-shadow: 0 2px 10px rgba(255, 71, 87, 0.5);
+                        animation: pulse 2s ease-in-out infinite;
+                        z-index: 2;
+                      }
+
+                      @keyframes pulse {
+                        0%, 100% { transform: scale(1); }
+                        50% { transform: scale(1.05); }
+                      }
+
+                      /* 配置面板样式 */
+                      #gameLobby .config-toggle {
+                        position: absolute;
+                        top: -8px;
+                        right: -8px;
+                        width: 44px;
+                        height: 44px;
+                        background: rgba(255, 215, 0, 0.3);
+                        border: 1px solid rgba(255, 215, 0, 0.5);
+                        border-radius: 50%;
+                        cursor: pointer;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        font-size: 18px;
+                        z-index: 100;
+                        transition: all 0.3s ease;
+                        -webkit-tap-highlight-color: transparent;
+                        touch-action: manipulation;
+                      }
+
+                      #gameLobby .config-toggle:hover {
+                        background: rgba(255, 215, 0, 0.4);
+                        transform: rotate(90deg);
+                      }
+
+                      #gameLobby .config-overlay {
+                        display: none;
+                        position: fixed;
+                        top: 0;
+                        left: 0;
+                        width: 100%;
+                        height: 100%;
+                        background: rgba(0, 0, 0, 0.5);
+                        z-index: 98;
+                      }
+
+                      #gameLobby .config-overlay.show {
+                        display: block;
+                      }
+
+                      #gameLobby .config-panel {
+                        position: fixed;
+                        top: 70px;
+                        left: 20px;
+                        width: min(380px, calc(100vw - 40px));
+                        max-height: calc(100vh - 100px);
+                        max-height: calc(100dvh - 100px);
+                        background: rgba(20, 25, 40, 0.98);
+                        border: 1px solid rgba(255, 215, 0, 0.3);
+                        border-radius: 16px;
+                        padding: 0;
+                        z-index: 99;
+                        display: none;
+                        overflow: hidden;
+                        backdrop-filter: blur(10px);
+                        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+                        flex-direction: column;
+                      }
+
+                      #gameLobby .config-panel.show {
+                        display: flex;
+                      }
+
+                      #gameLobby .config-panel-header {
+                        padding: 16px 20px;
+                        border-bottom: 1px solid rgba(255, 215, 0, 0.2);
+                        flex-shrink: 0;
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: center;
+                      }
+
+                      #gameLobby .config-panel-body {
+                        flex: 1;
+                        overflow-y: auto;
+                        -webkit-overflow-scrolling: touch;
+                        padding: 0 20px 20px 20px;
+                        overscroll-behavior: contain;
+                      }
+
+                      #gameLobby .config-panel-footer {
+                        padding: 16px 20px;
+                        padding-bottom: max(16px, env(safe-area-inset-bottom));
+                        border-top: 1px solid rgba(255, 255, 255, 0.1);
+                        background: rgba(20, 25, 40, 0.98);
+                        flex-shrink: 0;
+                      }
+
+                      #gameLobby .config-row {
+                        display: grid;
+                        grid-template-columns: 1fr 1fr;
+                        gap: 10px;
+                        align-items: end;
+                      }
+
+                      /* 协议这种短字段：左侧固定更窄，右侧给长输入框 */
+                      #gameLobby .config-row.protocol-row {
+                        grid-template-columns: 140px 1fr;
+                      }
+
+                      #gameLobby .config-panel h3 {
+                        color: #ffd700;
+                        margin: 0;
+                        font-size: 16px;
+                        padding: 0;
+                      }
+
+                      #gameLobby .config-group {
+                        margin-bottom: 12px;
+                      }
+
+                      #gameLobby .config-group label {
+                        display: block;
+                        color: #a0a8c0;
+                        font-size: 12px;
+                        margin-bottom: 4px;
+                      }
+
+                      #gameLobby .config-group input,
+                      #gameLobby .config-group select {
+                        width: 100%;
+                        padding: 10px 12px;
+                        background: rgba(255, 255, 255, 0.05);
+                        border: 1px solid rgba(255, 255, 255, 0.1);
+                        border-radius: 8px;
+                        color: #fff;
+                        font-size: 16px;
+                        box-sizing: border-box;
+                        transition: all 0.2s ease;
+                        -webkit-appearance: none;
+                      }
+
+                      #gameLobby .config-group input:focus,
+                      #gameLobby .config-group select:focus {
+                        outline: none;
+                        border-color: rgba(255, 215, 0, 0.5);
+                        background: rgba(255, 255, 255, 0.08);
+                      }
+
+                      @media (max-width: 480px) {
+                        #gameLobby .config-panel {
+                          left: 0;
+                          top: 0;
+                          width: 100vw;
+                          height: 100vh;
+                          height: 100dvh;
+                          max-height: 100vh;
+                          max-height: 100dvh;
+                          border-radius: 0;
+                        }
+
+                        #gameLobby .config-panel-header {
+                          padding: 12px 16px;
+                        }
+
+                        #gameLobby .config-panel-body {
+                          padding: 0 16px 16px 16px;
+                        }
+
+                        #gameLobby .config-panel-footer {
+                          padding: 12px 16px;
+                          padding-bottom: max(12px, env(safe-area-inset-bottom));
+                        }
+
+                        #gameLobby .config-row,
+                        #gameLobby .config-row.protocol-row {
+                          grid-template-columns: 1fr;
+                        }
+
+                        #gameLobby .game {
+                          width: 150px;
+                          height: 190px;
+                        }
+
+                        #gameLobby .game-icon {
+                          font-size: 44px;
+                        }
+
+                        #gameLobby .game-container {
+                          gap: 16px;
+                        }
+
+                        #gameLobby .lobby-wrapper {
+                          padding: 20px 12px;
+                        }
+                      }
+
+                      #gameLobby .config-actions {
+                        display: flex;
+                        gap: 10px;
+                      }
+
+                      #gameLobby .config-close {
+                        background: none;
+                        border: none;
+                        color: #a0a8c0;
+                        font-size: 22px;
+                        cursor: pointer;
+                        padding: 8px 12px;
+                        margin: -8px -12px;
+                        line-height: 1;
+                        -webkit-tap-highlight-color: transparent;
+                        touch-action: manipulation;
+                      }
+
+                      #gameLobby .config-btn {
+                        flex: 1;
+                        padding: 12px;
+                        border: none;
+                        border-radius: 8px;
+                        cursor: pointer;
+                        font-size: 15px;
+                        font-weight: 600;
+                        transition: all 0.2s ease;
+                        -webkit-tap-highlight-color: transparent;
+                        touch-action: manipulation;
+                      }
+
+                      #gameLobby .config-btn.save {
+                        background: linear-gradient(135deg, #ffd700, #ffaa00);
+                        color: #1a1a2e;
+                      }
+
+                      #gameLobby .config-btn.reset {
+                        background: rgba(255, 255, 255, 0.1);
+                        color: #a0a8c0;
+                      }
+
+                      #gameLobby .config-btn:hover {
+                        transform: translateY(-2px);
+                        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+                      }
+
+                      #gameLobby .config-section {
+                        color: #ffd700;
+                        font-size: 11px;
+                        text-transform: uppercase;
+                        letter-spacing: 1px;
+                        margin: 15px 0 8px 0;
+                        opacity: 0.7;
+                      }
+            </style>
+
+            <div class="lobby-wrapper">
+                <h1 class="lobby-title">🎮 游戏大厅</h1>
+
+                <!-- 遮罩层 -->
+                <div class="config-overlay" id="configOverlay" onclick="toggleConfig()"></div>
+
+                <!-- 配置面板 -->
+                <div class="config-panel" id="configPanel">
+                    <div class="config-panel-header">
+                        <h3 style="margin:0; padding:0;">⚙️ 参数配置</h3>
+                        <button class="config-close" onclick="toggleConfig()">✕</button>
+                    </div>
+
+                    <div class="config-panel-body">
+                        <div class="config-section">服务器配置</div>
+                        <div class="config-row protocol-row">
+                            <div class="config-group">
+                                <label>接口协议 (api_protocol)</label>
+                                <select id="cfg_api_protocol">
+                                    <option value="http">http</option>
+                                    <option value="https">https</option>
+                                </select>
+                            </div>
+                            <div class="config-group">
+                                <label>服务器地址 (server)</label>
+                                <input type="text" id="cfg_server" placeholder="gws-westpool.ht666.xyz" />
+                            </div>
+                        </div>
+                        <div class="config-group">
+                            <label>签名密钥 (appKey)</label>
+                            <input type="text" id="cfg_appKey" placeholder="appKey" />
+                        </div>
+                        <div class="config-group">
+                            <label>接口路径 (path)</label>
+                            <input type="text" id="cfg_path" placeholder="/api/v1/game/login" />
+                        </div>
+
+                        <div class="config-section">用户信息</div>
+                        <div class="config-group">
+                            <label>用户 UUID (uuid)</label>
+                            <input type="text" id="cfg_uuid" placeholder="12345678" />
+                        </div>
+                        <div class="config-group">
+                            <label>昵称 (nickname)</label>
+                            <input type="text" id="cfg_nickname" placeholder="恭喜发财" />
+                        </div>
+                        <div class="config-group">
+                            <label>会话 (session)</label>
+                            <input type="text" id="cfg_session" placeholder="TEST" />
+                        </div>
+
+                        <div class="config-section">业务参数</div>
+                        <div class="config-group">
+                            <label>渠道 ID (channel_id)</label>
+                            <input type="number" id="cfg_channel_id" placeholder="1" />
+                        </div>
+                        <div class="config-group">
+                            <label>商户 ID (merchant_id)</label>
+                            <input type="number" id="cfg_merchant_id" placeholder="1" />
+                        </div>
+                        <div class="config-group">
+                            <label>游戏 ID (game_id)</label>
+                            <input type="number" id="cfg_game_id" placeholder="20000" />
+                        </div>
+                        <div class="config-row protocol-row">
+                            <div class="config-group">
+                                <label>跳转协议 (redirect_protocol)</label>
+                                <select id="cfg_redirect_protocol">
+                                    <option value="http">http</option>
+                                    <option value="https">https</option>
+                                </select>
+                            </div>
+                            <div class="config-group">
+                                <label>游戏跳转地址 (game_redirect)</label>
+                                <input type="text" id="cfg_game_redirect" placeholder="localhost:7456" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="config-panel-footer">
+                        <div class="config-actions">
+                            <button class="config-btn reset" onclick="resetConfig()">重置默认</button>
+                            <button class="config-btn save" onclick="saveConfig()">保存配置</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="game-container">
+                    <!-- 配置按钮 -->
+                    <div class="config-toggle" onclick="toggleConfig()">⚙️</div>
+                    <!-- 显示当前 UUID 和昵称 -->
+                    <div id="configInfo" style="text-align: center; margin-bottom: 10px; font-size: 12px; color: #666;">
+                        <div>UUID: <span id="displayUuid">--</span></div>
+                        <div>昵称: <span id="displayNickname">--</span></div>
+                        <button id="resetIdentityBtn" style="margin-top: 6px; padding: 4px 12px; font-size: 11px; border: 1px solid #ccc; border-radius: 4px; background: #f5f5f5; cursor: pointer;">重置身份</button>
+                    </div>
+                    <div class="game" data-game="wlzb Game">
+                        <span class="game-badge">HOT</span>
+                        <div class="game-icon">🐉</div>
+                        <span>五龙争霸 7</span>
+                    </div>
+                </div>
+            </div>
+
+            <script src="https://cdn.jsdelivr.net/npm/crypto-js@4.1.1/crypto-js.min.js"></script>
+            <script>
+                const randomString = (min = 8, max = 12) =>
+                  Array.from(
+                    { length: Math.floor(Math.random() * (max - min + 1)) + min },
+                    () =>
+                      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"[
+                        Math.floor(Math.random() * 62)
+                      ]
+                  ).join("");
+
+                const flattenParams = (obj, prefix = "") => {
+                  if (obj === null || obj === undefined) return {};
+                  if (typeof obj !== "object") return { [prefix]: String(obj) };
+                  return Object.entries(obj).reduce((acc, [k, v]) => {
+                    const key = prefix ? `${prefix}[${k}]` : k;
+                    return { ...acc, ...flattenParams(v, key) };
+                  }, {});
+                };
+
+                const generateSign = (path, params, appKey) => {
+                  const flat = flattenParams(params);
+                  const query = Object.keys(flat)
+                    .sort()
+                    .map((k) => `${k}=${flat[k]}`)
+                    .join("&");
+                  const signStr = `${path}?${query}`;
+                  return CryptoJS.HmacSHA256(signStr, appKey).toString(CryptoJS.enc.Hex);
+                };
+
+                const getUrlParam = (name, defaultValue) => {
+                  const value = new URLSearchParams(window.location.search).get(name);
+                  return value !== null ? value : defaultValue;
+                };
+
+                // 生成随机 9 位 ID
+                const generateUUID = () => {
+                  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+                  let result = '';
+                  for (let i = 0; i < 9; i++) {
+                    result += chars[Math.floor(Math.random() * chars.length)];
+                  }
+                  return result;
+                };
+
+                // 获取或生成 UUID（优先使用本地缓存）
+                const getOrCreateUUID = () => {
+                  const saved = localStorage.getItem('gameLobbyConfig');
+                  if (saved) {
+                    try {
+                      const config = JSON.parse(saved);
+                      if (config.uuid) return config.uuid;
+                    } catch (e) {}
+                  }
+                  return generateUUID();
+                };
+
+                // 生成随机网络昵称（吉祥语风格）
+                const generateChineseName = () => {
+                  const nicknames = [
+                    '恭喜发财','财源广进','日进斗金','金玉满堂','富贵临门','鸿运当头','好运连连','一路发发',
+                    '大吉大利','财运亨通','招财进宝','福星高照','吉星高照','步步高升','心想事成','万事如意',
+                    '事事顺心','飞黄腾达','龙腾虎跃','马到成功','旗开得胜','一帆风顺','风生水起','前程似锦',
+                    '锦绣前程','青云直上','扶摇直上','平步青云','蒸蒸日上','欣欣向荣','红红火火','热热闹闹',
+                    '发发发发','赢赢赢赢','好运爆棚','运气爆表','神仙下凡','天选之人','欧皇附体','非酋转运',
+                    '稳如泰山','逢赌必赢','手气爆棚','幸运之星','锦鲤本鲤','今晚吃鸡','大杀四方','所向披靡',
+                    '无敌是寂寞','来者不善','善者不来','低调赢家','闷声发财','悄悄赢钱','默默暴富','一夜暴富'
+                  ];
+                  return nicknames[Math.floor(Math.random() * nicknames.length)];
+                };
+
+                // 获取或生成昵称（优先使用本地缓存）
+                const getOrCreateNickname = () => {
+                  const saved = localStorage.getItem('gameLobbyConfig');
+                  if (saved) {
+                    try {
+                      const config = JSON.parse(saved);
+                      if (config.nickname) return config.nickname;
+                    } catch (e) {}
+                  }
+                  return generateChineseName();
+                };
+
+                // 默认配置
+                const defaultConfig = {
+                  api_protocol: "https",
+                  redirect_protocol: "http",
+                  server: "gws-westpool.ht666.xyz",
+                  appKey: "7bf1c9cf708e840cd0d91458db62fd8d",
+                  path: "/api/v1/game/login",
+                  uuid: getOrCreateUUID(),
+                  nickname: getOrCreateNickname(),
+                  session: "TEST",
+                  channel_id: 1,
+                  merchant_id: 1,
+                  game_id: 12000,
+                  game_redirect: "wlzbjs.ht666.xyz",
+                };
+
+                // 从 localStorage 加载配置
+                const loadConfig = () => {
+                  const saved = localStorage.getItem('gameLobbyConfig');
+                  if (saved) {
+                    try {
+                      return { ...defaultConfig, ...JSON.parse(saved) };
+                    } catch (e) {
+                      return { ...defaultConfig };
+                    }
+                  }
+                  return { ...defaultConfig };
+                };
+
+                // 可配置参数（优先级：URL 参数 > localStorage > 默认值）
+                const savedConfig = loadConfig();
+                const legacyProtocol = getUrlParam("protocol", savedConfig.protocol);
+                const config = {
+                  // legacy: protocol（用于兼容旧链接/旧 localStorage）
+                  api_protocol: getUrlParam(
+                    "api_protocol",
+                    legacyProtocol || savedConfig.api_protocol || savedConfig.protocol || defaultConfig.api_protocol
+                  ),
+                  redirect_protocol: getUrlParam(
+                    "redirect_protocol",
+                    // 注意：redirect_protocol 不应被 legacy protocol 覆盖，否则会出现“默认 http 但跳转仍 https”
+                    savedConfig.redirect_protocol || defaultConfig.redirect_protocol
+                  ),
+                  server: getUrlParam("server", savedConfig.server),
+                  appKey: getUrlParam("appKey", savedConfig.appKey),
+                  path: getUrlParam("path", savedConfig.path),
+                  uuid: getUrlParam("uuid", savedConfig.uuid),
+                  nickname: getUrlParam("nickname", savedConfig.nickname),
+                  session: getUrlParam("session", savedConfig.session),
+                  channel_id: parseInt(getUrlParam("channel_id", savedConfig.channel_id)),
+                  merchant_id: parseInt(getUrlParam("merchant_id", savedConfig.merchant_id)),
+                  game_id: parseInt(getUrlParam("game_id", savedConfig.game_id)),
+                  game_redirect: getUrlParam("game_redirect", savedConfig.game_redirect),
+                };
+
+                // 兼容旧字段：保存一份 protocol（等同 api_protocol）
+                config.protocol = config.api_protocol;
+
+                console.log("GameLobby config:", config);
+
+                // 更新页面显示的 UUID 和昵称
+                document.getElementById('displayUuid').textContent = config.uuid;
+                document.getElementById('displayNickname').textContent = config.nickname;
+
+                // 配置面板功能
+                function toggleConfig() {
+                  const panel = document.getElementById('configPanel');
+                  const overlay = document.getElementById('configOverlay');
+                  panel.classList.toggle('show');
+                  overlay.classList.toggle('show');
+                  // 关闭时收起键盘
+                  if (!panel.classList.contains('show')) {
+                    document.activeElement && document.activeElement.blur();
+                  }
+                }
+
+                function loadConfigToInputs() {
+                  document.getElementById('cfg_api_protocol').value = config.api_protocol;
+                  document.getElementById('cfg_redirect_protocol').value = config.redirect_protocol;
+                  document.getElementById('cfg_server').value = config.server;
+                  document.getElementById('cfg_appKey').value = config.appKey;
+                  document.getElementById('cfg_path').value = config.path;
+                  document.getElementById('cfg_uuid').value = config.uuid;
+                  document.getElementById('cfg_nickname').value = config.nickname;
+                  document.getElementById('cfg_session').value = config.session;
+                  document.getElementById('cfg_channel_id').value = config.channel_id;
+                  document.getElementById('cfg_merchant_id').value = config.merchant_id;
+                  document.getElementById('cfg_game_id').value = config.game_id;
+                  document.getElementById('cfg_game_redirect').value = config.game_redirect;
+                }
+
+                function saveConfig() {
+                  config.api_protocol = document.getElementById('cfg_api_protocol').value || defaultConfig.api_protocol;
+                  config.redirect_protocol = document.getElementById('cfg_redirect_protocol').value || defaultConfig.redirect_protocol;
+                  config.protocol = config.api_protocol; // legacy
+                  config.server = document.getElementById('cfg_server').value || defaultConfig.server;
+                  config.appKey = document.getElementById('cfg_appKey').value || defaultConfig.appKey;
+                  config.path = document.getElementById('cfg_path').value || defaultConfig.path;
+                  config.uuid = document.getElementById('cfg_uuid').value || defaultConfig.uuid;
+                  config.nickname = document.getElementById('cfg_nickname').value || defaultConfig.nickname;
+                  config.session = document.getElementById('cfg_session').value || defaultConfig.session;
+                  config.channel_id = parseInt(document.getElementById('cfg_channel_id').value) || defaultConfig.channel_id;
+                  config.merchant_id = parseInt(document.getElementById('cfg_merchant_id').value) || defaultConfig.merchant_id;
+                  config.game_id = parseInt(document.getElementById('cfg_game_id').value) || defaultConfig.game_id;
+                  config.game_redirect = document.getElementById('cfg_game_redirect').value || defaultConfig.game_redirect;
+
+                  localStorage.setItem('gameLobbyConfig', JSON.stringify(config));
+                  console.log("Config saved:", config);
+                  // 更新页面显示
+                  document.getElementById('displayUuid').textContent = config.uuid;
+                  document.getElementById('displayNickname').textContent = config.nickname;
+                  alert('配置已保存！');
+                  toggleConfig();
+                }
+
+                function resetConfig() {
+                  Object.assign(config, defaultConfig);
+                  localStorage.removeItem('gameLobbyConfig');
+                  loadConfigToInputs();
+                  // 更新页面显示
+                  document.getElementById('displayUuid').textContent = config.uuid;
+                  document.getElementById('displayNickname').textContent = config.nickname;
+                  console.log("Config reset to default:", config);
+                  alert('已重置为默认配置！');
+                }
+
+                // 重置身份（UUID 和昵称）
+                function resetIdentity() {
+                  config.uuid = generateUUID();
+                  config.nickname = generateChineseName();
+                  // 更新页面显示
+                  document.getElementById('displayUuid').textContent = config.uuid;
+                  document.getElementById('displayNickname').textContent = config.nickname;
+                  // 同步更新配置面板输入框
+                  const uuidInput = document.getElementById('cfg_uuid');
+                  const nicknameInput = document.getElementById('cfg_nickname');
+                  if (uuidInput) uuidInput.value = config.uuid;
+                  if (nicknameInput) nicknameInput.value = config.nickname;
+                  // 保存到 localStorage
+                  localStorage.setItem('gameLobbyConfig', JSON.stringify(config));
+                  console.log("Identity reset:", { uuid: config.uuid, nickname: config.nickname });
+                }
+
+                // 初始化输入框
+                document.addEventListener('DOMContentLoaded', loadConfigToInputs);
+
+                // 绑定重置身份按钮
+                document.getElementById('resetIdentityBtn').addEventListener('click', resetIdentity);
+
+                document.querySelectorAll(".game").forEach((game) => {
+                  game.addEventListener("click", () => {
+                    const gameName = game.dataset.game;
+                    console.log(`点击了游戏: ${gameName}`);
+                    // 点击时自动保存配置
+                    localStorage.setItem('gameLobbyConfig', JSON.stringify(config));
+
+                    const params = {
+                      channel_id: config.channel_id,
+                      merchant_id: config.merchant_id,
+                      game_id: config.game_id,
+                      uuid: config.uuid,
+                      nickname: config.nickname,
+                      session: config.session,
+                      timestamp: Math.floor(Date.now() / 1000),
+                      nonce: randomString(),
+                    };
+
+                    const sign = generateSign(config.path, params, config.appKey);
+
+                    fetch(`${config.api_protocol}://${config.server}${config.path}`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", Sign: sign },
+                      body: JSON.stringify(params),
+                    })
+                      .then((res) => res.json())
+                      .then((data) => {
+                        console.log("res:", data);
+                        const url = new URL(data.data.game_url);
+                        if (data.success) {
+                          const redirectBase = String(config.game_redirect || '').includes("://")
+                            ? config.game_redirect
+                            : `${config.redirect_protocol}://${config.game_redirect}`;
+                          window.location.replace(`${redirectBase}?${url.searchParams}`);
+                        }
+                      })
+                      .catch((err) => console.error("请求失败:", err));
+                  });
+                });
+            </script>
+        </div>
+    </body>
+</html>

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { ArrowLeft, CopyDocument, Delete, Position } from '@element-plus/icons-vue'
+import { ArrowLeft, CopyDocument, Delete, Position, RefreshRight } from '@element-plus/icons-vue'
 import type { JumpStore } from '../composables/useJumpStore'
-import type { ArgRow, OpenMode } from '../types/jump'
+import type { ArgRow, LobbyConfig, OpenMode } from '../types/jump'
 
 const props = defineProps<{
   store: JumpStore
@@ -20,6 +20,8 @@ const nameInput = ref<{ focus: () => void; select?: () => void } | null>(null)
 const argRows = ref<ArgRow[]>([])
 
 const item = computed(() => props.store.selectedItem.value)
+const lobby = computed(() => props.store.selectedLobby.value)
+const isLobby = computed(() => item.value?.kind === 'lobby')
 
 watch(
   () => props.store.selectedId.value,
@@ -84,6 +86,62 @@ function onUrl(val: string) {
   props.store.updateSelected({ url: val })
 }
 
+function patchLobby(patch: Partial<LobbyConfig>) {
+  props.store.updateSelectedLobby(patch)
+}
+
+function onLobbyText(
+  key: keyof Pick<
+    LobbyConfig,
+    | 'server'
+    | 'appKey'
+    | 'path'
+    | 'uuid'
+    | 'nickname'
+    | 'session'
+    | 'game_redirect'
+  >,
+  val: string | number | null | undefined,
+) {
+  patchLobby({ [key]: String(val ?? '') })
+}
+
+function onLobbyNumber(
+  key: keyof Pick<LobbyConfig, 'channel_id' | 'merchant_id' | 'game_id'>,
+  val: number | undefined | null,
+) {
+  if (typeof val === 'number' && Number.isFinite(val)) {
+    patchLobby({ [key]: val })
+  }
+}
+
+function onLobbyProtocol(
+  key: 'api_protocol' | 'redirect_protocol',
+  val: string | number | boolean | undefined,
+) {
+  if (val === 'http' || val === 'https') {
+    patchLobby({ [key]: val })
+  }
+}
+
+
+function onApiProtocol(v: string | number | boolean | undefined) {
+  onLobbyProtocol('api_protocol', v)
+}
+function onRedirectProtocol(v: string | number | boolean | undefined) {
+  onLobbyProtocol('redirect_protocol', v)
+}
+function onServer(v: string) { onLobbyText('server', v) }
+function onAppKey(v: string) { onLobbyText('appKey', v) }
+function onPath(v: string) { onLobbyText('path', v) }
+function onUuid(v: string) { onLobbyText('uuid', v) }
+function onNickname(v: string) { onLobbyText('nickname', v) }
+function onSession(v: string) { onLobbyText('session', v) }
+function onGameRedirect(v: string) { onLobbyText('game_redirect', v) }
+function onChannelId(v: number | undefined) { onLobbyNumber('channel_id', v) }
+function onMerchantId(v: number | undefined) { onLobbyNumber('merchant_id', v) }
+function onGameId(v: number | undefined) { onLobbyNumber('game_id', v) }
+
 async function onDelete() {
   await props.store.deleteSelected()
   if (props.isMobile) emit('back')
@@ -108,6 +166,7 @@ async function onDelete() {
         返回
       </el-button>
       <span>属性面板</span>
+      <el-tag v-if="isLobby" size="small" type="warning" class="ml-1">大厅</el-tag>
     </div>
 
     <div v-if="!item" class="flex flex-1 items-center justify-center px-4 text-sm text-slate-400">
@@ -143,48 +202,176 @@ async function onDelete() {
           />
         </div>
 
-        <div>
-          <label class="mb-1 block text-xs text-slate-500">跳转地址</label>
-          <el-input
-            :model-value="item.url"
-            placeholder="https://..."
-            @update:model-value="onUrl"
-          />
-        </div>
+        <!-- 普通项：URL + args -->
+        <template v-if="!isLobby">
+          <div>
+            <label class="mb-1 block text-xs text-slate-500">跳转地址</label>
+            <el-input
+              :model-value="item.url"
+              placeholder="https://..."
+              @update:model-value="onUrl"
+            />
+          </div>
 
-        <div>
-          <div class="mb-2 flex items-center justify-between">
-            <label class="text-xs text-slate-500">参数</label>
-            <el-button size="small" @click="addArgRow">添加参数</el-button>
-          </div>
-          <div v-if="argRows.length === 0" class="text-xs text-slate-400">暂无参数</div>
-          <div v-for="(row, index) in argRows" :key="index" class="mb-2 flex gap-2">
-            <el-input
-              v-model="row.key"
-              placeholder="key"
-              class="flex-1"
-              @change="commitArgs"
-            />
-            <el-input
-              v-model="row.value"
-              placeholder="value"
-              class="flex-1"
-              @change="commitArgs"
-            />
-            <el-button :icon="Delete" @click="removeArgRow(index)" />
-          </div>
-          <div class="mt-3 space-y-2">
-            <el-button class="w-full" :icon="CopyDocument" @click="store.duplicateSelected()">
-              复制当前配置
-            </el-button>
-            <div class="flex gap-2">
-              <el-button type="primary" class="flex-1" :icon="Position" @click="store.jumpSelected()">
-                跳转
-              </el-button>
-              <el-button type="danger" plain class="flex-1" :icon="Delete" @click="onDelete">
-                删除
-              </el-button>
+          <div>
+            <div class="mb-2 flex items-center justify-between">
+              <label class="text-xs text-slate-500">参数</label>
+              <el-button size="small" @click="addArgRow">添加参数</el-button>
             </div>
+            <div v-if="argRows.length === 0" class="text-xs text-slate-400">暂无参数</div>
+            <div v-for="(row, index) in argRows" :key="index" class="mb-2 flex gap-2">
+              <el-input
+                v-model="row.key"
+                placeholder="key"
+                class="flex-1"
+                @change="commitArgs"
+              />
+              <el-input
+                v-model="row.value"
+                placeholder="value"
+                class="flex-1"
+                @change="commitArgs"
+              />
+              <el-button :icon="Delete" @click="removeArgRow(index)" />
+            </div>
+          </div>
+        </template>
+
+        <!-- 大厅项：对齐 deploy_lobby 参数面板 -->
+        <template v-else-if="lobby">
+          <div class="text-xs font-medium text-slate-600">服务器配置</div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="mb-1 block text-xs text-slate-500">接口协议</label>
+              <el-select
+                :model-value="lobby.api_protocol"
+                class="w-full"
+                @update:model-value="onApiProtocol"
+              >
+                <el-option label="http" value="http" />
+                <el-option label="https" value="https" />
+              </el-select>
+            </div>
+            <div>
+              <label class="mb-1 block text-xs text-slate-500">服务器地址</label>
+              <el-input
+                :model-value="lobby.server"
+                placeholder="gws-westpool.ht666.xyz"
+                @update:model-value="onServer"
+              />
+            </div>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs text-slate-500">签名密钥 (appKey)</label>
+            <el-input
+              :model-value="lobby.appKey"
+              placeholder="appKey"
+              @update:model-value="onAppKey"
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs text-slate-500">接口路径 (path)</label>
+            <el-input
+              :model-value="lobby.path"
+              placeholder="/api/v1/game/login"
+              @update:model-value="onPath"
+            />
+          </div>
+
+          <div class="text-xs font-medium text-slate-600">用户信息</div>
+          <div>
+            <label class="mb-1 block text-xs text-slate-500">用户 UUID</label>
+            <el-input
+              :model-value="lobby.uuid"
+              @update:model-value="onUuid"
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs text-slate-500">昵称</label>
+            <el-input
+              :model-value="lobby.nickname"
+              @update:model-value="onNickname"
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs text-slate-500">会话 (session)</label>
+            <el-input
+              :model-value="lobby.session"
+              @update:model-value="onSession"
+            />
+          </div>
+
+          <div class="text-xs font-medium text-slate-600">业务参数</div>
+          <div>
+            <label class="mb-1 block text-xs text-slate-500">渠道 ID</label>
+            <el-input-number
+              class="!w-full"
+              :model-value="lobby.channel_id"
+              :controls="false"
+              @update:model-value="onChannelId"
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs text-slate-500">商户 ID</label>
+            <el-input-number
+              class="!w-full"
+              :model-value="lobby.merchant_id"
+              :controls="false"
+              @update:model-value="onMerchantId"
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs text-slate-500">游戏 ID</label>
+            <el-input-number
+              class="!w-full"
+              :model-value="lobby.game_id"
+              :controls="false"
+              @update:model-value="onGameId"
+            />
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="mb-1 block text-xs text-slate-500">跳转协议</label>
+              <el-select
+                :model-value="lobby.redirect_protocol"
+                class="w-full"
+                @update:model-value="onRedirectProtocol"
+              >
+                <el-option label="http" value="http" />
+                <el-option label="https" value="https" />
+              </el-select>
+            </div>
+            <div>
+              <label class="mb-1 block text-xs text-slate-500">游戏跳转地址</label>
+              <el-input
+                :model-value="lobby.game_redirect"
+                placeholder="localhost:7456"
+                @update:model-value="onGameRedirect"
+              />
+            </div>
+          </div>
+          <el-button class="w-full" :icon="RefreshRight" @click="store.resetSelectedLobby()">
+            重置大厅默认参数
+          </el-button>
+        </template>
+
+        <div class="space-y-2 pt-1">
+          <el-button class="w-full" :icon="CopyDocument" @click="store.duplicateSelected()">
+            复制当前配置
+          </el-button>
+          <div class="flex gap-2">
+            <el-button
+              type="primary"
+              class="flex-1"
+              :icon="Position"
+              :loading="store.jumping.value"
+              @click="store.jumpSelected()"
+            >
+              跳转
+            </el-button>
+            <el-button type="danger" plain class="flex-1" :icon="Delete" @click="onDelete">
+              删除
+            </el-button>
           </div>
         </div>
       </div>
