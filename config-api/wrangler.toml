@@ -17,3 +17,11 @@ id = "d640b3a9cd94435596ab5051ac70c6ae"
 [[kv_namespaces]]
 binding = "JUMP_LOBBY_BACKUP"
 id = "2795262444744234b7dad2c3cc10d1be"
+
+[[kv_namespaces]]
+binding = "JUMP_ITEM_LAYOUT"
+id = "04de4f6ba8094269a3ac8da140091da5"
+
+[[kv_namespaces]]
+binding = "JUMP_FIELD_LAYOUT"
+id = "d89c4492c0034ceca67f05ed4f5fb3b2"

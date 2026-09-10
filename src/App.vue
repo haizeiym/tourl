@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useJumpStore } from './composables/useJumpStore'
+import { useLayoutStore } from './composables/useLayoutStore'
 import { useIsMobile } from './composables/useIsMobile'
 import TopBar from './components/TopBar.vue'
 import JumpGrid from './components/JumpGrid.vue'
@@ -13,6 +14,7 @@ const MIN_WIDTH = 280
 const MAX_RATIO = 0.7
 
 const store = useJumpStore()
+const layout = useLayoutStore()
 const { isMobile } = useIsMobile()
 
 const inspectorWidth = ref(DEFAULT_WIDTH)
@@ -76,7 +78,11 @@ onMounted(() => {
     /* ignore */
   }
   window.addEventListener('resize', onWinResize)
-  void store.loadGlobalConfig({ confirmDirty: false })
+  void (async () => {
+    await store.loadGlobalConfig({ confirmDirty: false })
+    await layout.loadLayout({ silent: true })
+    layout.syncItemOrder(store.config.value.items)
+  })()
 })
 
 onUnmounted(() => {
@@ -90,7 +96,7 @@ watch(isMobile, () => {
 
 <template>
   <div class="flex h-dvh flex-col bg-slate-100 text-slate-800">
-    <TopBar :store="store" :is-mobile="isMobile" />
+    <TopBar :store="store" :layout="layout" :is-mobile="isMobile" />
     <div class="flex min-h-0 flex-1" :class="dragging ? 'select-none' : ''">
       <template v-if="store.isIframePreview.value">
         <IframePreview :store="store" :is-mobile="isMobile" />
@@ -99,13 +105,14 @@ watch(isMobile, () => {
         <InspectorPanel
           v-if="showInspectorOnMobile"
           :store="store"
+          :layout="layout"
           :is-mobile="true"
           @back="backToList"
         />
-        <JumpGrid v-else :store="store" :is-mobile="true" />
+        <JumpGrid v-else :store="store" :layout="layout" :is-mobile="true" />
       </template>
       <template v-else>
-        <JumpGrid :store="store" :is-mobile="false" />
+        <JumpGrid :store="store" :layout="layout" :is-mobile="false" />
         <!-- 拖拽手柄：左右拉动调整属性面板宽度，Grid 随 flex 自适应 -->
         <div
           class="group relative z-10 w-1 shrink-0 cursor-col-resize bg-slate-200 transition hover:bg-blue-400"
@@ -121,6 +128,7 @@ watch(isMobile, () => {
         </div>
         <InspectorPanel
           :store="store"
+          :layout="layout"
           :is-mobile="false"
           :width="inspectorWidth"
         />

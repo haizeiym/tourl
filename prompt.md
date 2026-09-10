@@ -537,3 +537,24 @@ public/data/jump-config.json
 - [ ] wrangler 绑定 4 个 namespace：CONFIG / LOBBY / CONFIG_BACKUP / LOBBY_BACKUP
 - [ ] 点「备份」后两份备份 KV 与源内容一致
 - [ ] 备份失败不影响线上主库
+
+## 11 美化与布局（独立 KV）
+
+1. TopBar 按钮自动换行（约两行），桌面可拖动调整按钮顺序
+2. Grid 卡片可拖动调整显示顺序（不改 JUMP_CONFIG 业务数据）
+3. 顶栏按 `item.kind` 过滤（普通 / 大厅；新增 kind 自动出现选项）
+4. Inspector 属性块可拖动调整显示顺序（含「跳转」「删除」独立块）
+5. 两个新 KV（禁止复用已有库）：
+   - `JUMP_ITEM_LAYOUT`：`itemOrder` + `toolbarOrder`；HTTP `GET/PUT /layout/items`
+   - `JUMP_FIELD_LAYOUT`：`inspectorOrder`；HTTP `GET/PUT /layout/fields`
+6. TopBar「读取位置」「保存位置」；启动默认读取位置
+7. 右侧属性面板「跳转」「删除」各自可拖动调整顺序（与其它属性块同一套 inspectorOrder）
+
+验收：
+
+- [ ] 按钮过长时两行可见，拖动顺序后「保存位置」刷新仍在
+- [ ] Grid 拖动卡片后「保存位置」刷新顺序保持
+- [ ] 过滤类别随 items 的 kind 自动增长
+- [ ] 属性块拖动后「保存位置」刷新保持
+- [ ] 「跳转」「删除」可单独拖动，保存位置后刷新保持
+- [ ] 布局与业务配置分属不同 KV

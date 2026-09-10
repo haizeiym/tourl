@@ -7,10 +7,13 @@ const props = defineProps<{
   item: JumpItem
   selected: boolean
   compact?: boolean
+  draggable?: boolean
 }>()
 
 const emit = defineEmits<{
   select: [id: string]
+  dragStart: [id: string, e: DragEvent]
+  dropOn: [id: string, e: DragEvent]
 }>()
 
 const imgFailed = ref(false)
@@ -32,8 +35,13 @@ const showImg = () => Boolean(props.item.iconUrl) && !imgFailed.value
     :class="[
       compact ? 'gap-1.5 rounded-lg border-2 bg-white p-2' : 'gap-2 rounded-lg border-2 bg-white p-3',
       selected ? 'border-blue-500 shadow-sm' : 'border-transparent',
+      draggable ? 'cursor-grab active:cursor-grabbing' : '',
     ]"
+    :draggable="Boolean(draggable)"
     @click="emit('select', item.id)"
+    @dragstart="emit('dragStart', item.id, $event)"
+    @dragover.prevent
+    @drop.prevent="emit('dropOn', item.id, $event)"
   >
     <div
       class="relative flex shrink-0 items-center justify-center overflow-hidden rounded-xl bg-slate-100 font-semibold text-slate-600"

@@ -259,7 +259,7 @@ export function useJumpStore() {
     try {
       const result = await backupGlobalStores()
       ElMessage.success(
-        `已备份到独立 KV（配置 ${result.configKeys} 键 / 大厅 ${result.lobbyKeys} 键）`,
+        `已备份到 Cloudflare KV（JUMP_CONFIG ${result.configKeys} 键 / JUMP_LOBBY ${result.lobbyKeys} 键）`,
       )
     } catch (err) {
       console.error('[backupToKv]', err)

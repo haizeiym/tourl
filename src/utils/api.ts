@@ -1,4 +1,6 @@
 import type { JumpConfigFile, LobbyConfig } from '../types/jump'
+import type { FieldLayoutFile, ItemLayoutFile } from '../types/layout'
+import { parseFieldLayout, parseItemLayout } from '../types/layout'
 import { parseJumpConfig } from './jump'
 import { parseLobbyConfig } from './lobby'
 
@@ -415,7 +417,7 @@ function backupApiUrl(cloudConfigUrl: string): string {
   return resourceApiUrl(cloudConfigUrl, '/backup')
 }
 
-/** 把 JUMP_CONFIG / JUMP_LOBBY 全量快照到独立备份 KV（开发写 data/backup） */
+/** 把 JUMP_CONFIG / JUMP_LOBBY 全量快照到 Cloudflare 备份 KV（有 cloud-url 时必写远端） */
 export async function backupGlobalStores(): Promise<BackupResult> {
   const parse = async (res: Response): Promise<BackupResult> => {
     if (!res.ok) throw new Error(await parseError(res))
@@ -432,18 +434,95 @@ export async function backupGlobalStores(): Promise<BackupResult> {
     }
   }
 
+  const cloud = await resolveCloudUrl()
+  if (cloud) {
+    const res = await fetch(backupApiUrl(cloud), {
+      method: 'POST',
+      cache: 'no-store',
+    })
+    const result = await parse(res)
+    if (import.meta.env.DEV) {
+      try {
+        await fetch('/api/backup', { method: 'POST', cache: 'no-store' })
+      } catch (err) {
+        console.warn('[backupGlobalStores] 本地 data/backup 同步失败', err)
+      }
+    }
+    return result
+  }
+
   if (import.meta.env.DEV) {
     const res = await fetch('/api/backup', { method: 'POST', cache: 'no-store' })
     return parse(res)
   }
 
+  throw new Error('未配置稳定持久化 API，无法备份')
+}
+
+async function layoutGetPut(suffix: string, body?: unknown): Promise<unknown | null> {
   const cloud = await resolveCloudUrl()
-  if (!cloud) {
-    throw new Error('未配置稳定持久化 API，无法备份')
+  const urls: string[] = []
+  const local = `/api/layout/${suffix}`
+  if (cloud) urls.push(resourceApiUrl(cloud, `/layout/${suffix}`))
+  if (import.meta.env.DEV) urls.push(local)
+  else urls.push(local)
+
+  if (body === undefined) {
+    for (const url of urls) {
+      const result = await requestJson(url)
+      if (result.ok && result.data) return result.data
+    }
+    return null
   }
-  const res = await fetch(backupApiUrl(cloud), {
-    method: 'POST',
-    cache: 'no-store',
-  })
-  return parse(res)
+
+  const payload = JSON.stringify(body)
+  const targets = cloud
+    ? [resourceApiUrl(cloud, `/layout/${suffix}`), ...(import.meta.env.DEV ? [local] : [])]
+    : import.meta.env.DEV
+      ? [local]
+      : []
+  if (targets.length === 0) {
+    throw new Error('未配置稳定持久化 API，无法保存位置')
+  }
+  let lastErr = '保存位置失败'
+  let saved: unknown | null = null
+  for (const url of targets) {
+    try {
+      const res = await fetch(url, {
+        method: 'PUT',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: payload,
+      })
+      if (!res.ok) {
+        lastErr = await parseError(res)
+        continue
+      }
+      saved = await res.json()
+    } catch (err) {
+      lastErr = err instanceof Error ? err.message : lastErr
+    }
+  }
+  if (saved == null && cloud) {
+    throw new Error(lastErr)
+  }
+  return saved
+}
+
+export async function fetchItemLayout(): Promise<ItemLayoutFile> {
+  return parseItemLayout(await layoutGetPut('items'))
+}
+
+export async function fetchFieldLayout(): Promise<FieldLayoutFile> {
+  return parseFieldLayout(await layoutGetPut('fields'))
+}
+
+export async function saveItemLayout(layout: ItemLayoutFile): Promise<ItemLayoutFile> {
+  const saved = await layoutGetPut('items', layout)
+  return parseItemLayout(saved ?? layout)
+}
+
+export async function saveFieldLayout(layout: FieldLayoutFile): Promise<FieldLayoutFile> {
+  const saved = await layoutGetPut('fields', layout)
+  return parseFieldLayout(saved ?? layout)
 }

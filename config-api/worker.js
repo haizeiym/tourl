@@ -3,6 +3,7 @@
  * - JUMP_CONFIG：跳转列表
  * - JUMP_LOBBY：大厅参数
  * - JUMP_CONFIG_BACKUP / JUMP_LOBBY_BACKUP：点击「备份」时的快照（独立 namespace）
+ * - JUMP_ITEM_LAYOUT / JUMP_FIELD_LAYOUT：Grid/按钮顺序 与 属性面板字段顺序
  */
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -49,22 +50,42 @@ async function listAllKeys(ns) {
   return names
 }
 
+async function lobbyKeysFromConfig(env) {
+  const raw = await env.JUMP_CONFIG.get(KEY)
+  if (!raw) return []
+  try {
+    const cfg = JSON.parse(raw)
+    const items = Array.isArray(cfg.items) ? cfg.items : []
+    return items
+      .filter((i) => i && i.kind === 'lobby' && typeof i.id === 'string' && i.id)
+      .map((i) => lobbyKey(i.id))
+  } catch {
+    return []
+  }
+}
+
 /** 把 src 全量快照到 dest（覆盖同名 key，删除 dest 中多余 key） */
-async function snapshotKv(src, dest) {
+async function snapshotKv(src, dest, extraKeys = []) {
   if (!src || !dest) {
     throw new Error('备份 KV 未绑定')
   }
   const srcKeys = await listAllKeys(src)
+  for (const k of extraKeys) {
+    if (k && !srcKeys.includes(k)) srcKeys.push(k)
+  }
   const destKeys = await listAllKeys(dest)
   const srcSet = new Set(srcKeys)
+  let copied = 0
   for (const name of srcKeys) {
     const val = await src.get(name)
-    if (val !== null) await dest.put(name, val)
+    if (val === null) continue
+    await dest.put(name, val)
+    copied += 1
   }
   for (const name of destKeys) {
     if (!srcSet.has(name)) await dest.delete(name)
   }
-  return srcKeys.length
+  return copied
 }
 
 export default {
@@ -105,14 +126,47 @@ export default {
         if (request.method !== 'POST') {
           return json({ error: 'Method Not Allowed' }, 405)
         }
-        const configKeys = await snapshotKv(env.JUMP_CONFIG, env.JUMP_CONFIG_BACKUP)
-        const lobbyKeys = await snapshotKv(env.JUMP_LOBBY, env.JUMP_LOBBY_BACKUP)
+        const configKeys = await snapshotKv(env.JUMP_CONFIG, env.JUMP_CONFIG_BACKUP, [
+          KEY,
+        ])
+        const lobbyKeys = await snapshotKv(
+          env.JUMP_LOBBY,
+          env.JUMP_LOBBY_BACKUP,
+          await lobbyKeysFromConfig(env),
+        )
         return json({
           ok: true,
           backedAt: Date.now(),
           configKeys,
           lobbyKeys,
         })
+      }
+
+      const layoutMatch = pathname.match(/^\/layout\/(items|fields)\/?$/)
+      if (layoutMatch) {
+        const which = layoutMatch[1]
+        const ns = which === 'items' ? env.JUMP_ITEM_LAYOUT : env.JUMP_FIELD_LAYOUT
+        if (!ns) {
+          return json({ error: `未绑定 ${which === 'items' ? 'JUMP_ITEM_LAYOUT' : 'JUMP_FIELD_LAYOUT'}` }, 500)
+        }
+        if (request.method === 'GET') {
+          const raw = await ns.get('layout')
+          if (!raw) return json({})
+          try {
+            return json(JSON.parse(raw))
+          } catch {
+            return json({ error: '布局损坏' }, 500)
+          }
+        }
+        if (request.method === 'PUT') {
+          const body = await request.json()
+          if (!body || typeof body !== 'object') {
+            return json({ error: 'body 须为对象' }, 400)
+          }
+          await ns.put('layout', JSON.stringify(body))
+          return json(body)
+        }
+        return json({ error: 'Method Not Allowed' }, 405)
       }
 
       const lobbyId = parseLobbyId(pathname)

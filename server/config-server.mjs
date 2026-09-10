@@ -10,6 +10,7 @@ const LOBBY_DIR = path.join(ROOT, 'data', 'lobby')
 const BACKUP_DIR = path.join(ROOT, 'data', 'backup')
 const BACKUP_CONFIG = path.join(BACKUP_DIR, 'jump-config.json')
 const BACKUP_LOBBY_DIR = path.join(BACKUP_DIR, 'lobby')
+const LAYOUT_DIR = path.join(ROOT, 'data', 'layout')
 const DIST_DIR = path.join(ROOT, 'dist')
 const PORT = Number(process.env.PORT || 8787)
 const SERVE_STATIC = process.env.SERVE_STATIC === '1'
@@ -271,6 +272,38 @@ const server = http.createServer(async (req, res) => {
         }
       }
       sendJson(res, 200, { lobbies })
+      return
+    }
+
+    const layoutMatch = url.pathname.match(/^\/(?:api\/)?layout\/(items|fields)\/?$/)
+    if (layoutMatch) {
+      const which = layoutMatch[1]
+      const file = path.join(LAYOUT_DIR, `${which}.json`)
+      if (method === 'GET') {
+        try {
+          const raw = JSON.parse(await fs.readFile(file, 'utf8'))
+          sendJson(res, 200, raw)
+        } catch (err) {
+          if (err && typeof err === 'object' && 'code' in err && err.code === 'ENOENT') {
+            sendJson(res, 200, {})
+            return
+          }
+          throw err
+        }
+        return
+      }
+      if (method === 'PUT') {
+        const body = await readBody(req)
+        if (!body || typeof body !== 'object') {
+          sendJson(res, 400, { error: 'body 须为对象' })
+          return
+        }
+        await fs.mkdir(LAYOUT_DIR, { recursive: true })
+        await fs.writeFile(file, JSON.stringify(body, null, 2), 'utf8')
+        sendJson(res, 200, body)
+        return
+      }
+      sendJson(res, 405, { error: 'Method Not Allowed' })
       return
     }
 
