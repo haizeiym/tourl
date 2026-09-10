@@ -500,7 +500,7 @@ public/data/jump-config.json
 | 分组 | 字段 |
 |------|------|
 | 服务器 | `api_protocol`, `server`, `appKey`, `path` |
-| 用户 | `uuid`, `nickname`, `session` |
+| 用户 | `uuid`（右侧重置）、`nickname`（右侧重置）、`session` |
 | 业务 | `channel_id`, `merchant_id`, `game_id`, `redirect_protocol`, `game_redirect` |
 
 提供「重置大厅默认参数」。普通项仍用 URL + args 面板。

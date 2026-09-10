@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { ArrowLeft, CopyDocument, Delete, Position, RefreshRight } from '@element-plus/icons-vue'
 import type { JumpStore } from '../composables/useJumpStore'
 import type { ArgRow, LobbyConfig, OpenMode } from '../types/jump'
+import { generateLobbyNickname, generateLobbyUuid } from '../utils/lobby'
 
 const props = defineProps<{
   store: JumpStore
@@ -136,6 +137,14 @@ function onAppKey(v: string) { onLobbyText('appKey', v) }
 function onPath(v: string) { onLobbyText('path', v) }
 function onUuid(v: string) { onLobbyText('uuid', v) }
 function onNickname(v: string) { onLobbyText('nickname', v) }
+
+function resetUuid() {
+  patchLobby({ uuid: generateLobbyUuid() })
+}
+
+function resetNickname() {
+  patchLobby({ nickname: generateLobbyNickname() })
+}
 function onSession(v: string) { onLobbyText('session', v) }
 function onGameRedirect(v: string) { onLobbyText('game_redirect', v) }
 function onChannelId(v: number | undefined) { onLobbyNumber('channel_id', v) }
@@ -281,17 +290,25 @@ async function onDelete() {
           <div class="text-xs font-medium text-slate-600">用户信息</div>
           <div>
             <label class="mb-1 block text-xs text-slate-500">用户 UUID</label>
-            <el-input
-              :model-value="lobby.uuid"
-              @update:model-value="onUuid"
-            />
+            <div class="flex gap-2">
+              <el-input
+                class="flex-1"
+                :model-value="lobby.uuid"
+                @update:model-value="onUuid"
+              />
+              <el-button :icon="RefreshRight" @click="resetUuid">重置</el-button>
+            </div>
           </div>
           <div>
             <label class="mb-1 block text-xs text-slate-500">昵称</label>
-            <el-input
-              :model-value="lobby.nickname"
-              @update:model-value="onNickname"
-            />
+            <div class="flex gap-2">
+              <el-input
+                class="flex-1"
+                :model-value="lobby.nickname"
+                @update:model-value="onNickname"
+              />
+              <el-button :icon="RefreshRight" @click="resetNickname">重置</el-button>
+            </div>
           </div>
           <div>
             <label class="mb-1 block text-xs text-slate-500">会话 (session)</label>

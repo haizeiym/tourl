@@ -76,6 +76,31 @@ export default {
     const { pathname } = new URL(request.url)
 
     try {
+      if (pathname === '/lobbies' || pathname === '/lobbies/') {
+        if (request.method !== 'GET') {
+          return json({ error: 'Method Not Allowed' }, 405)
+        }
+        const lobbyKv = env.JUMP_LOBBY
+        if (!lobbyKv) {
+          return json({ error: '未绑定 JUMP_LOBBY KV' }, 500)
+        }
+        const names = await listAllKeys(lobbyKv)
+        const lobbies = {}
+        for (const name of names) {
+          const id = name.startsWith(LOBBY_PREFIX)
+            ? name.slice(LOBBY_PREFIX.length)
+            : name
+          const raw = await lobbyKv.get(name)
+          if (!raw) continue
+          try {
+            lobbies[id] = JSON.parse(raw)
+          } catch {
+            /* skip corrupt */
+          }
+        }
+        return json({ lobbies })
+      }
+
       if (pathname === '/backup' || pathname === '/backup/') {
         if (request.method !== 'POST') {
           return json({ error: 'Method Not Allowed' }, 405)

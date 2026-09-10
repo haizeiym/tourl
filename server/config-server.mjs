@@ -252,6 +252,28 @@ const server = http.createServer(async (req, res) => {
       return
     }
 
+    if ((url.pathname === '/api/lobbies' || url.pathname === '/lobbies') && method === 'GET') {
+      await fs.mkdir(LOBBY_DIR, { recursive: true })
+      let names = []
+      try {
+        names = await fs.readdir(LOBBY_DIR)
+      } catch {
+        names = []
+      }
+      const lobbies = {}
+      for (const n of names) {
+        if (!n.endsWith('.json')) continue
+        const id = n.slice(0, -5)
+        try {
+          lobbies[id] = JSON.parse(await fs.readFile(path.join(LOBBY_DIR, n), 'utf8'))
+        } catch {
+          /* skip */
+        }
+      }
+      sendJson(res, 200, { lobbies })
+      return
+    }
+
     if ((url.pathname === '/api/config' || url.pathname === '/api/config.php' || url.pathname === '/config.php') && method === 'GET') {
       const config = await readConfig()
       sendJson(res, 200, config)

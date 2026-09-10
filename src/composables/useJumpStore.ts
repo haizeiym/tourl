@@ -5,6 +5,7 @@ import {
   ConfigConflictError,
   backupGlobalStores,
   deleteLobbyConfig,
+  fetchAllLobbyConfigs,
   fetchGlobalConfig,
   fetchLobbyConfig,
   saveGlobalConfig,
@@ -93,18 +94,41 @@ export function useJumpStore() {
 
   async function hydrateLobbies(items: JumpItem[]) {
     clearLobbyCache()
+    const fromKv = await fetchAllLobbyConfigs()
+    for (const [id, lobby] of Object.entries(fromKv)) {
+      lobbyById[id] = lobby
+    }
+
     const lobbyItems = items.filter((i) => i.kind === 'lobby')
+    const missing: string[] = []
     await Promise.all(
       lobbyItems.map(async (item) => {
+        if (lobbyById[item.id]) return
         try {
           const remote = await fetchLobbyConfig(item.id)
-          lobbyById[item.id] = remote ?? createDefaultLobbyConfig()
+          if (remote) {
+            lobbyById[item.id] = remote
+            return
+          }
         } catch (err) {
           console.warn('[hydrateLobbies]', item.id, err)
-          lobbyById[item.id] = createDefaultLobbyConfig()
         }
+        missing.push(item.name || item.id)
+        lobbyById[item.id] = createDefaultLobbyConfig()
       }),
     )
+
+    if (lobbyItems.length === 0 && Object.keys(fromKv).length > 0) {
+      console.warn(
+        '[hydrateLobbies] JUMP_LOBBY 有数据，但全局列表没有 kind=lobby 的项；请先「保存到全局」',
+        Object.keys(fromKv),
+      )
+    }
+    if (missing.length > 0) {
+      ElMessage.warning(
+        `大厅 KV 中没有这些项的参数，已用默认值：${missing.join('、')}。请点「保存大厅全局」`,
+      )
+    }
   }
 
   async function persistLobbies(items: JumpItem[]) {
@@ -116,6 +140,28 @@ export function useJumpStore() {
         await saveLobbyConfig(item.id, lobby)
       }),
     )
+  }
+
+  function mergeLobbyCardsFromKv() {
+    const known = new Set(config.value.items.map((i) => i.id))
+    for (const [id, lobby] of Object.entries(lobbyById)) {
+      const existing = config.value.items.find((i) => i.id === id)
+      if (existing) {
+        existing.kind = 'lobby'
+        continue
+      }
+      if (known.has(id)) continue
+      config.value.items.push({
+        id,
+        kind: 'lobby',
+        openMode: 'tab',
+        name: `大厅 ${lobby.game_id}`.slice(0, 64),
+        iconUrl: '',
+        url: '',
+        args: {},
+      })
+      known.add(id)
+    }
   }
 
   function applyConfig(next: JumpConfigFile, clearDirty = true) {
@@ -135,8 +181,12 @@ export function useJumpStore() {
       const remote = await fetchGlobalConfig()
       applyConfig(remote)
       await hydrateLobbies(remote.items)
+      mergeLobbyCardsFromKv()
       lobbyDirty.value = false
-      ElMessage.success(`已加载全局配置（${remote.items.length} 项）`)
+      const lobbyCount = config.value.items.filter((i) => i.kind === 'lobby').length
+      ElMessage.success(
+        `已加载全局配置（${config.value.items.length} 项，大厅 KV ${lobbyCount} 项）`,
+      )
     } catch (err) {
       console.error('[loadGlobalConfig]', err)
       const msg = err instanceof Error ? err.message : '加载失败'

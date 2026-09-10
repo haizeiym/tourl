@@ -264,38 +264,94 @@ export async function saveGlobalConfig(
   }
 }
 
-/** 由 cloud-url（.../config）推导大厅项地址 .../lobby/:id */
-function lobbyApiUrl(itemId: string, cloudConfigUrl: string): string {
+function resourceApiUrl(cloudConfigUrl: string, suffix: string): string {
   const u = new URL(cloudConfigUrl)
   const basePath = u.pathname.replace(/\/config\/?$/, '')
-  u.pathname = `${basePath}/lobby/${encodeURIComponent(itemId)}`
+  u.pathname = `${basePath}${suffix}`
   u.search = ''
   u.hash = ''
   return u.toString()
 }
 
-export async function fetchLobbyConfig(itemId: string): Promise<LobbyConfig | null> {
-  if (import.meta.env.DEV) {
-    const raw = await fetchJson(`/api/lobby/${encodeURIComponent(itemId)}`)
-    if (!raw) return null
-    try {
-      return parseLobbyConfig(raw)
-    } catch (err) {
-      console.warn('[fetchLobbyConfig] parse failed', err)
-      return null
-    }
-  }
+/** 由 cloud-url（.../config）推导大厅项地址 .../lobby/:id */
+function lobbyApiUrl(itemId: string, cloudConfigUrl: string): string {
+  return resourceApiUrl(cloudConfigUrl, `/lobby/${encodeURIComponent(itemId)}`)
+}
 
-  const cloud = await resolveCloudUrl()
-  if (!cloud) return null
-  const raw = await fetchJson(lobbyApiUrl(itemId, cloud))
-  if (!raw) return null
+async function requestJson(url: string): Promise<{ ok: boolean; status: number; data: unknown | null }> {
   try {
-    return parseLobbyConfig(raw)
+    const res = await fetch(cacheBust(url), {
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+    })
+    let data: unknown = null
+    try {
+      const text = await res.text()
+      if (text.trimStart().startsWith('{') || text.trimStart().startsWith('[')) {
+        data = JSON.parse(text) as unknown
+      }
+    } catch {
+      /* ignore body */
+    }
+    return { ok: res.ok, status: res.status, data }
+  } catch {
+    return { ok: false, status: 0, data: null }
+  }
+}
+
+export async function fetchLobbyConfig(itemId: string): Promise<LobbyConfig | null> {
+  const path = `/api/lobby/${encodeURIComponent(itemId)}`
+  const result = import.meta.env.DEV
+    ? await requestJson(path)
+    : await (async () => {
+        const cloud = await resolveCloudUrl()
+        if (!cloud) return { ok: false, status: 0, data: null }
+        return requestJson(lobbyApiUrl(itemId, cloud))
+      })()
+
+  if (!result.ok || result.data == null) return null
+  try {
+    return parseLobbyConfig(result.data)
   } catch (err) {
     console.warn('[fetchLobbyConfig] parse failed', err)
     return null
   }
+}
+
+/** 一次拉取 JUMP_LOBBY 全部大厅参数 */
+export async function fetchAllLobbyConfigs(): Promise<Record<string, LobbyConfig>> {
+  const cloud = await resolveCloudUrl()
+  const urls: string[] = []
+  if (import.meta.env.DEV) {
+    urls.push('/api/lobbies')
+    if (cloud) urls.push(resourceApiUrl(cloud, '/lobbies'))
+  } else {
+    if (cloud) urls.push(resourceApiUrl(cloud, '/lobbies'))
+    urls.push('/api/lobbies')
+  }
+
+  const out: Record<string, LobbyConfig> = {}
+  for (const url of urls) {
+    const result = await requestJson(url)
+    if (!result.ok || typeof result.data !== 'object' || result.data === null) {
+      continue
+    }
+    const map = (result.data as { lobbies?: unknown }).lobbies
+    if (!map || typeof map !== 'object') continue
+    for (const [id, value] of Object.entries(map as Record<string, unknown>)) {
+      try {
+        out[id] = parseLobbyConfig(value)
+      } catch {
+        /* skip */
+      }
+    }
+    if (Object.keys(out).length > 0) return out
+  }
+
+  if (Object.keys(out).length === 0) {
+    console.warn('[fetchAllLobbyConfigs] JUMP_LOBBY 为空或读取失败')
+  }
+  return out
 }
 
 export async function saveLobbyConfig(
@@ -356,12 +412,7 @@ export type BackupResult = {
 }
 
 function backupApiUrl(cloudConfigUrl: string): string {
-  const u = new URL(cloudConfigUrl)
-  const basePath = u.pathname.replace(/\/config\/?$/, '')
-  u.pathname = `${basePath}/backup`
-  u.search = ''
-  u.hash = ''
-  return u.toString()
+  return resourceApiUrl(cloudConfigUrl, '/backup')
 }
 
 /** 把 JUMP_CONFIG / JUMP_LOBBY 全量快照到独立备份 KV（开发写 data/backup） */
