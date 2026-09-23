@@ -25,7 +25,10 @@ import {
   createDefaultLobbyConfig,
   createLobbyJumpItem,
   executeLobbyJump,
+  ensureLocalLobbyUser,
+  lobbyForSharedStore,
   parseLobbyConfig,
+  writeLocalLobbyUser,
 } from '../utils/lobby'
 
 export function useJumpStore() {
@@ -62,6 +65,13 @@ export function useJumpStore() {
 
   function markLobbyDirty() {
     lobbyDirty.value = true
+  }
+
+  function applyLocalUserToAllLobbies() {
+    const user = ensureLocalLobbyUser()
+    for (const id of Object.keys(lobbyById)) {
+      lobbyById[id] = { ...lobbyById[id]!, ...user }
+    }
   }
 
   function selectItem(id: string) {
@@ -117,6 +127,7 @@ export function useJumpStore() {
         lobbyById[item.id] = createDefaultLobbyConfig()
       }),
     )
+    applyLocalUserToAllLobbies()
 
     if (lobbyItems.length === 0 && Object.keys(fromKv).length > 0) {
       console.warn(
@@ -137,7 +148,7 @@ export function useJumpStore() {
       lobbyItems.map(async (item) => {
         const lobby = lobbyById[item.id] ?? createDefaultLobbyConfig()
         lobbyById[item.id] = lobby
-        await saveLobbyConfig(item.id, lobby)
+        await saveLobbyConfig(item.id, lobbyForSharedStore(lobby))
       }),
     )
   }
@@ -405,7 +416,7 @@ export function useJumpStore() {
     const lobbies: Record<string, LobbyConfig> = {}
     for (const item of config.value.items) {
       if (item.kind === 'lobby' && lobbyById[item.id]) {
-        lobbies[item.id] = lobbyById[item.id]!
+        lobbies[item.id] = lobbyForSharedStore(lobbyById[item.id]!)
       }
     }
     downloadJson(`jump-config-${stamp}.json`, {
@@ -432,8 +443,14 @@ export function useJumpStore() {
   function updateSelectedLobby(patch: Partial<LobbyConfig>) {
     const item = selectedItem.value
     if (!item || item.kind !== 'lobby') return
+    const { uuid, nickname, ...shared } = patch
+    if (uuid !== undefined || nickname !== undefined) {
+      writeLocalLobbyUser({ uuid, nickname })
+      applyLocalUserToAllLobbies()
+    }
+    if (Object.keys(shared).length === 0) return
     const current = lobbyById[item.id] ?? createDefaultLobbyConfig()
-    lobbyById[item.id] = { ...current, ...patch }
+    lobbyById[item.id] = { ...current, ...shared, ...ensureLocalLobbyUser() }
     markLobbyDirty()
   }
 

@@ -39,16 +39,78 @@ export function generateLobbyNickname(): string {
   return NICKNAMES[Math.floor(Math.random() * NICKNAMES.length)]!
 }
 
+const LS_USER_KEY = 'jumpl.lobbyUser'
+
+export type LocalLobbyUser = {
+  uuid: string
+  nickname: string
+}
+
+function nonempty(v: unknown): string {
+  return typeof v === 'string' ? v.trim() : ''
+}
+
+function readRawLocalUser(): Partial<LocalLobbyUser> {
+  try {
+    const raw = localStorage.getItem(LS_USER_KEY)
+    if (!raw) return {}
+    const obj = JSON.parse(raw) as unknown
+    if (typeof obj !== 'object' || obj === null) return {}
+    const rec = obj as Record<string, unknown>
+    return {
+      uuid: nonempty(rec.uuid) || undefined,
+      nickname: nonempty(rec.nickname) || undefined,
+    }
+  } catch (err) {
+    console.warn('[readLocalLobbyUser] 读取失败', err)
+    return {}
+  }
+}
+
+/** 写入本机 uuid/nickname；空值会重新随机 */
+export function writeLocalLobbyUser(patch: Partial<LocalLobbyUser>): LocalLobbyUser {
+  const cur = readRawLocalUser()
+  const uuid = nonempty(patch.uuid !== undefined ? patch.uuid : cur.uuid) || generateLobbyUuid()
+  const nickname =
+    nonempty(patch.nickname !== undefined ? patch.nickname : cur.nickname) ||
+    generateLobbyNickname()
+  const next = { uuid, nickname }
+  try {
+    localStorage.setItem(LS_USER_KEY, JSON.stringify(next))
+  } catch (err) {
+    console.warn('[writeLocalLobbyUser] 写入失败', err)
+  }
+  return next
+}
+
+/** 读本机用户身份；没有则随机生成并落盘 */
+export function ensureLocalLobbyUser(): LocalLobbyUser {
+  const raw = readRawLocalUser()
+  if (raw.uuid && raw.nickname) return { uuid: raw.uuid, nickname: raw.nickname }
+  const next = writeLocalLobbyUser({
+    uuid: raw.uuid,
+    nickname: raw.nickname,
+  })
+  console.info('[lobbyUser] 本地无 uuid/nickname，已随机生成并写入 localStorage')
+  return next
+}
+
+/** 写入 JUMP_LOBBY / 导出时去掉本机身份，避免串到其他设备 */
+export function lobbyForSharedStore(lobby: LobbyConfig): LobbyConfig {
+  return { ...lobby, uuid: '', nickname: '' }
+}
+
 /** 与 deploy_lobby defaultConfig 对齐的默认大厅参数 */
 export function createDefaultLobbyConfig(): LobbyConfig {
+  const user = ensureLocalLobbyUser()
   return {
     api_protocol: 'https',
     redirect_protocol: 'http',
     server: 'gws-westpool.ht666.xyz',
     appKey: '7bf1c9cf708e840cd0d91458db62fd8d',
     path: '/api/v1/game/login',
-    uuid: generateLobbyUuid(),
-    nickname: generateLobbyNickname(),
+    uuid: user.uuid,
+    nickname: user.nickname,
     session: 'TEST',
     channel_id: 1,
     merchant_id: 1,
@@ -121,6 +183,7 @@ export function parseLobbyConfig(raw: unknown): LobbyConfig {
   }
   const obj = raw as Record<string, unknown>
   const base = createDefaultLobbyConfig()
+  const user = ensureLocalLobbyUser()
   const api =
     obj.api_protocol === 'http' || obj.api_protocol === 'https'
       ? obj.api_protocol
@@ -136,8 +199,8 @@ export function parseLobbyConfig(raw: unknown): LobbyConfig {
     server: typeof obj.server === 'string' ? obj.server : base.server,
     appKey: typeof obj.appKey === 'string' ? obj.appKey : base.appKey,
     path: typeof obj.path === 'string' ? obj.path : base.path,
-    uuid: typeof obj.uuid === 'string' ? obj.uuid : base.uuid,
-    nickname: typeof obj.nickname === 'string' ? obj.nickname : base.nickname,
+    uuid: user.uuid,
+    nickname: user.nickname,
     session: typeof obj.session === 'string' ? obj.session : base.session,
     channel_id:
       typeof obj.channel_id === 'number' && Number.isFinite(obj.channel_id)

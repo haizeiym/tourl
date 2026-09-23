@@ -487,6 +487,7 @@ public/data/jump-config.json
 - **大厅参数不进主配置 JSON，也不得写入 `JUMP_CONFIG`**，必须使用**另一个 KV 命名空间**：
   - 生产：Worker binding `JUMP_LOBBY`（独立 namespace）；key = `lobby:{itemId}`；HTTP：`GET/PUT/DELETE /lobby/:id`
   - 开发：本地 `data/lobby/{id}.json`；HTTP：`/api/lobby/:id`
+- **例外**：`uuid` / `nickname` 不进 `JUMP_LOBBY`，只存本机 `localStorage`（见 §9.3）
 - TopBar **两个保存按钮，互不代写**：
   - 「保存到全局」→ 只写 `JUMP_CONFIG`（跳转列表）
   - 「保存大厅全局」→ 只写 `JUMP_LOBBY`（大厅参数）
@@ -500,8 +501,15 @@ public/data/jump-config.json
 | 分组 | 字段 |
 |------|------|
 | 服务器 | `api_protocol`, `server`, `appKey`, `path` |
-| 用户 | `uuid`（右侧重置）、`nickname`（右侧重置）、`session` |
+| 用户 | `uuid`、`nickname`（本机身份，见下）、`session`（仍属大厅 KV） |
 | 业务 | `channel_id`, `merchant_id`, `game_id`, `redirect_protocol`, `game_redirect` |
+
+`uuid` / `nickname` **只存在本机**（`localStorage` key `jumpl.lobbyUser`），不写入 `JUMP_LOBBY` / 导出 JSON：
+
+- 每次读取：先读本地；都有则沿用
+- 本地缺任一字段：随机生成并立刻写回本地
+- 右侧「重置」只改本机值；所有大厅项共用同一套身份
+- 「重置大厅默认参数」不改 uuid/nickname
 
 提供「重置大厅默认参数」。普通项仍用 URL + args 面板。
 
@@ -520,6 +528,7 @@ public/data/jump-config.json
 - [ ] Grid 大厅项有可见标识
 - [ ] 跳转走登录签名算法，非简单 URL 拼接
 - [ ] 普通项行为与改造前一致
+- [ ] uuid/nickname 读本地，缺失则随机生成并写入 localStorage；不进 JUMP_LOBBY
 
 ## 10 备份（独立 KV 快照）
 
