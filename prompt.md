@@ -455,6 +455,8 @@ public/data/jump-config.json
 1. 可运行工程：`npm install && npm run dev`（本地 API）
 2. 可部署的 `config-api/`（Worker + wrangler）与说明
 3. 生产构建：`npm run build`（已配置有效 `cloud-url.txt` 时），上传完整 `dist/`
+   - `npm run pack`：默认包，读写现有 KV
+   - `npm run pack -- <名称>`：创建并绑定 `JUMP_CONFIG_<名称>`、`JUMP_LOBBY_<名称>`、`JUMP_CONFIG_BACKUP_<名称>`、`JUMP_LOBBY_BACKUP_<名称>`、`JUMP_ITEM_LAYOUT_<名称>`、`JUMP_FIELD_LAYOUT_<名称>`（已存在则复用），部署 Worker，包内请求带 `kv=<名称>`，只读写这套 KV。不传名称时行为不变
 4. 类型与核心组件；样例 `data/jump-config.json` / `public/data/jump-config.json`
 5. `README.md` 说明一步静态部署与全员共用配置约定
 

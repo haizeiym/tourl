@@ -23,10 +23,29 @@ async function parseError(res: Response): Promise<string> {
   return `请求失败 (${res.status})`
 }
 
-function cacheBust(url: string): string {
+/** 打包参数。空字符串表示读写默认 KV（JUMP_CONFIG 等）。 */
+function kvProfile(): string {
+  if (import.meta.env.DEV) return ''
+  const raw = import.meta.env.VITE_KV_PROFILE
+  return typeof raw === 'string' ? raw.trim() : ''
+}
+
+function withKv(url: string): string {
+  const profile = kvProfile()
+  if (!profile) return url
   const u = new URL(url, typeof window !== 'undefined' ? window.location.origin : 'http://local')
+  u.searchParams.set('kv', profile)
+  return u.toString()
+}
+
+function cacheBust(url: string): string {
+  const u = new URL(withKv(url), typeof window !== 'undefined' ? window.location.origin : 'http://local')
   u.searchParams.set('_t', String(Date.now()))
   return u.toString()
+}
+
+if (kvProfile()) {
+  console.info(`[kv] 当前包读取独立 KV 后缀 _${kvProfile()}`)
 }
 
 async function fetchText(url: string): Promise<string | null> {
@@ -177,7 +196,7 @@ async function putToCloud(
     items: config.items,
   }
 
-  const putUrl = new URL(cloudUrl)
+  const putUrl = new URL(withKv(cloudUrl))
   if (force) putUrl.searchParams.set('force', '1')
   const res = await fetch(putUrl.toString(), {
     method: 'PUT',
@@ -377,7 +396,7 @@ export async function saveLobbyConfig(
   if (!cloud) {
     throw new Error('未配置稳定持久化 API，无法保存大厅参数')
   }
-  const res = await fetch(lobbyApiUrl(itemId, cloud), {
+  const res = await fetch(withKv(lobbyApiUrl(itemId, cloud)), {
     method: 'PUT',
     cache: 'no-store',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -399,7 +418,7 @@ export async function deleteLobbyConfig(itemId: string): Promise<void> {
 
   const cloud = await resolveCloudUrl()
   if (!cloud) return
-  const res = await fetch(lobbyApiUrl(itemId, cloud), {
+  const res = await fetch(withKv(lobbyApiUrl(itemId, cloud)), {
     method: 'DELETE',
     cache: 'no-store',
   })
@@ -436,7 +455,7 @@ export async function backupGlobalStores(): Promise<BackupResult> {
 
   const cloud = await resolveCloudUrl()
   if (cloud) {
-    const res = await fetch(backupApiUrl(cloud), {
+    const res = await fetch(withKv(backupApiUrl(cloud)), {
       method: 'POST',
       cache: 'no-store',
     })
@@ -488,7 +507,7 @@ async function layoutGetPut(suffix: string, body?: unknown): Promise<unknown | n
   let saved: unknown | null = null
   for (const url of targets) {
     try {
-      const res = await fetch(url, {
+      const res = await fetch(withKv(url), {
         method: 'PUT',
         cache: 'no-store',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },

@@ -53,6 +53,16 @@ npm run build
 
 数据在 Cloudflare KV，与静态站点发版无关。
 
+### 打包
+
+```bash
+npm run pack
+npm run pack -- beta
+```
+
+- 不带参数：`release/jumpl-dist.zip`，读写现有 `JUMP_CONFIG`、`JUMP_LOBBY`、`JUMP_CONFIG_BACKUP`、`JUMP_LOBBY_BACKUP`、`JUMP_ITEM_LAYOUT`、`JUMP_FIELD_LAYOUT`。
+- 带参数（字母开头，仅字母数字下划线）：为该名称创建上述 6 个 KV 的独立副本（已存在则复用，不覆盖数据），写入 `wrangler.toml` 并部署 Worker，打出 `release/jumpl-dist-<名称>.zip`。该包请求带 `kv=<名称>`，只读写 `JUMP_CONFIG_<名称>` 等对应库。`cloud-url.txt` 仍指向同一个 Worker。
+
 ---
 
 ## 本地开发

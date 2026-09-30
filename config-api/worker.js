@@ -4,6 +4,9 @@
  * - JUMP_LOBBY：大厅参数
  * - JUMP_CONFIG_BACKUP / JUMP_LOBBY_BACKUP：点击「备份」时的快照（独立 namespace）
  * - JUMP_ITEM_LAYOUT / JUMP_FIELD_LAYOUT：Grid/按钮顺序 与 属性面板字段顺序
+ *
+ * 查询参数 `kv` 为空时绑定名不变。`kv=beta` 时改为
+ * JUMP_CONFIG_beta、JUMP_LOBBY_beta 等（由 `npm run pack -- beta` 创建并绑定）。
  */
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -15,6 +18,24 @@ const CORS = {
 
 const KEY = 'jump-config'
 const LOBBY_PREFIX = 'lobby:'
+const KV_PROFILE_RE = /^[A-Za-z][A-Za-z0-9_]{0,31}$/
+
+function bindingName(base, profile) {
+  return profile ? `${base}_${profile}` : base
+}
+
+/** @returns {string | null} 空字符串=默认库；null=参数非法 */
+function readKvProfile(url) {
+  const raw = (url.searchParams.get('kv') || '').trim()
+  if (!raw) return ''
+  if (!KV_PROFILE_RE.test(raw)) return null
+  return raw
+}
+
+function pickNs(env, base, profile) {
+  const name = bindingName(base, profile)
+  return { name, ns: env[name] ?? null }
+}
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -50,8 +71,9 @@ async function listAllKeys(ns) {
   return names
 }
 
-async function lobbyKeysFromConfig(env) {
-  const raw = await env.JUMP_CONFIG.get(KEY)
+async function lobbyKeysFromConfig(configKv) {
+  if (!configKv) return []
+  const raw = await configKv.get(KEY)
   if (!raw) return []
   try {
     const cfg = JSON.parse(raw)
@@ -94,16 +116,27 @@ export default {
       return new Response(null, { status: 204, headers: CORS })
     }
 
-    const { pathname } = new URL(request.url)
+    const url = new URL(request.url)
+    const { pathname } = url
+    const profile = readKvProfile(url)
+    if (profile === null) {
+      return json({ error: '无效的 kv 参数' }, 400)
+    }
+    const configStore = pickNs(env, 'JUMP_CONFIG', profile)
+    const lobbyStore = pickNs(env, 'JUMP_LOBBY', profile)
+    const configBackupStore = pickNs(env, 'JUMP_CONFIG_BACKUP', profile)
+    const lobbyBackupStore = pickNs(env, 'JUMP_LOBBY_BACKUP', profile)
+    const itemLayoutStore = pickNs(env, 'JUMP_ITEM_LAYOUT', profile)
+    const fieldLayoutStore = pickNs(env, 'JUMP_FIELD_LAYOUT', profile)
 
     try {
       if (pathname === '/lobbies' || pathname === '/lobbies/') {
         if (request.method !== 'GET') {
           return json({ error: 'Method Not Allowed' }, 405)
         }
-        const lobbyKv = env.JUMP_LOBBY
+        const lobbyKv = lobbyStore.ns
         if (!lobbyKv) {
-          return json({ error: '未绑定 JUMP_LOBBY KV' }, 500)
+          return json({ error: `未绑定 ${lobbyStore.name} KV` }, 500)
         }
         const names = await listAllKeys(lobbyKv)
         const lobbies = {}
@@ -126,13 +159,11 @@ export default {
         if (request.method !== 'POST') {
           return json({ error: 'Method Not Allowed' }, 405)
         }
-        const configKeys = await snapshotKv(env.JUMP_CONFIG, env.JUMP_CONFIG_BACKUP, [
-          KEY,
-        ])
+        const configKeys = await snapshotKv(configStore.ns, configBackupStore.ns, [KEY])
         const lobbyKeys = await snapshotKv(
-          env.JUMP_LOBBY,
-          env.JUMP_LOBBY_BACKUP,
-          await lobbyKeysFromConfig(env),
+          lobbyStore.ns,
+          lobbyBackupStore.ns,
+          await lobbyKeysFromConfig(configStore.ns),
         )
         return json({
           ok: true,
@@ -145,9 +176,10 @@ export default {
       const layoutMatch = pathname.match(/^\/layout\/(items|fields)\/?$/)
       if (layoutMatch) {
         const which = layoutMatch[1]
-        const ns = which === 'items' ? env.JUMP_ITEM_LAYOUT : env.JUMP_FIELD_LAYOUT
+        const layoutStore = which === 'items' ? itemLayoutStore : fieldLayoutStore
+        const ns = layoutStore.ns
         if (!ns) {
-          return json({ error: `未绑定 ${which === 'items' ? 'JUMP_ITEM_LAYOUT' : 'JUMP_FIELD_LAYOUT'}` }, 500)
+          return json({ error: `未绑定 ${layoutStore.name} KV` }, 500)
         }
         if (request.method === 'GET') {
           const raw = await ns.get('layout')
@@ -171,9 +203,9 @@ export default {
 
       const lobbyId = parseLobbyId(pathname)
       if (lobbyId) {
-        const lobbyKv = env.JUMP_LOBBY
+        const lobbyKv = lobbyStore.ns
         if (!lobbyKv) {
-          return json({ error: '未绑定 JUMP_LOBBY KV' }, 500)
+          return json({ error: `未绑定 ${lobbyStore.name} KV` }, 500)
         }
         if (request.method === 'GET') {
           const raw = await lobbyKv.get(lobbyKey(lobbyId))
@@ -207,7 +239,10 @@ export default {
       }
 
       if (request.method === 'GET') {
-        const raw = await env.JUMP_CONFIG.get(KEY)
+        if (!configStore.ns) {
+          return json({ error: `未绑定 ${configStore.name} KV` }, 500)
+        }
+        const raw = await configStore.ns.get(KEY)
         if (!raw) return json(EMPTY)
         try {
           return json(JSON.parse(raw))
@@ -222,8 +257,11 @@ export default {
           return json({ error: 'body 须包含 items 数组' }, 400)
         }
 
-        const force = new URL(request.url).searchParams.get('force') === '1'
-        const currentRaw = await env.JUMP_CONFIG.get(KEY)
+        if (!configStore.ns) {
+          return json({ error: `未绑定 ${configStore.name} KV` }, 500)
+        }
+        const force = url.searchParams.get('force') === '1'
+        const currentRaw = await configStore.ns.get(KEY)
         const current = currentRaw ? JSON.parse(currentRaw) : EMPTY
         const clientUpdatedAt =
           typeof body.updatedAt === 'number' ? body.updatedAt : 0
@@ -242,7 +280,7 @@ export default {
           updatedAt: Date.now(),
           items: body.items,
         }
-        await env.JUMP_CONFIG.put(KEY, JSON.stringify(next))
+        await configStore.ns.put(KEY, JSON.stringify(next))
         return json(next)
       }
 
