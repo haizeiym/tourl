@@ -535,12 +535,34 @@ export function useJumpStore() {
     iframeSrc.value = null
   }
 
+  /**
+   * 同步打开新标签页（必须在用户点击的同步调用栈内执行，否则 iOS Safari 会拦截）。
+   * 注意：features 中带 noopener 时 window.open 恒返回 null，因此改为手动断开 opener。
+   */
+  function openBlankTab(url = ''): Window | null {
+    const win = window.open(url || 'about:blank', '_blank')
+    if (win) {
+      try {
+        win.opener = null
+      } catch {
+        /* ignore */
+      }
+    }
+    return win
+  }
+
   async function jumpSelected() {
     const item = selectedItem.value
     if (!item) return
 
     if (item.kind === 'lobby') {
       const lobby = lobbyById[item.id] ?? createDefaultLobbyConfig()
+      // 新标签模式：在 await 之前先同步打开空白页，拿到地址后再导航，避免 Safari 拦截
+      const preWin = item.openMode === 'iframe' ? null : openBlankTab()
+      if (item.openMode !== 'iframe' && !preWin) {
+        ElMessage.warning('弹窗被拦截，请允许本站打开新标签页，或改用「当前页」打开')
+        return
+      }
       jumping.value = true
       try {
         const { finalUrl } = await executeLobbyJump(lobby)
@@ -548,12 +570,18 @@ export function useJumpStore() {
           iframeSrc.value = finalUrl
           return
         }
-        const win = window.open(finalUrl, '_blank', 'noopener,noreferrer')
-        if (!win) {
+        if (preWin && !preWin.closed) {
+          preWin.location.href = finalUrl
+        } else if (!openBlankTab(finalUrl)) {
           ElMessage.warning('弹窗被拦截，请允许本站打开新标签页')
         }
       } catch (err) {
         console.error('[jumpSelected] lobby', err)
+        try {
+          preWin?.close()
+        } catch {
+          /* ignore */
+        }
         ElMessage.error(err instanceof Error ? err.message : '大厅跳转失败')
       } finally {
         jumping.value = false
@@ -580,9 +608,8 @@ export function useJumpStore() {
       return
     }
 
-    const win = window.open(finalUrl, '_blank', 'noopener,noreferrer')
-    if (!win) {
-      ElMessage.warning('弹窗被拦截，请允许本站打开新标签页')
+    if (!openBlankTab(finalUrl)) {
+      ElMessage.warning('弹窗被拦截，请允许本站打开新标签页，或改用「当前页」打开')
     }
   }
 
