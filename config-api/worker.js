@@ -173,6 +173,103 @@ export default {
         })
       }
 
+      if (pathname === '/screenshot/email' || pathname === '/screenshot/email/') {
+        if (request.method !== 'POST') {
+          return json({ error: 'Method Not Allowed' }, 405)
+        }
+        const body = await request.json()
+        const to = (typeof body?.to === 'string' ? body.to.trim() : '') || 'gcdxdy666@gmail.com'
+        const imageDataUrl = typeof body?.imageDataUrl === 'string' ? body.imageDataUrl : ''
+        const pageUrl = typeof body?.pageUrl === 'string' ? body.pageUrl : ''
+        const content = typeof body?.content === 'string' ? body.content.trim() : ''
+        const subject =
+          typeof body?.subject === 'string' && body.subject.trim()
+            ? body.subject.trim()
+            : `网页截图 (${new Date().toISOString().slice(0, 19).replace('T', ' ')})`
+
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+          return json({ error: '请填写有效的收件邮箱地址' }, 400)
+        }
+        const match = imageDataUrl.match(/^data:image\/png;base64,(.+)$/)
+        if (!match?.[1]) {
+          return json({ error: '截图数据格式无效（需为 PNG base64）' }, 400)
+        }
+        const base64Content = match[1]
+        const stamp = Date.now()
+        const contentHtml = content ? `<p>邮件内容：${content}</p>` : ''
+        const contentText = content ? `邮件内容：${content}\n` : ''
+
+        if (env.EMAIL && typeof env.EMAIL.send === 'function' && env.MAIL_FROM) {
+          await env.EMAIL.send({
+            from: { email: env.MAIL_FROM, name: 'Jumpl Screenshot' },
+            to: [to],
+            subject,
+            text: `${contentText}页面地址：${pageUrl || '未知'}\n截图见附件。`,
+            html: `${contentHtml}<p>页面地址：${pageUrl || '未知'}</p><p>截图见附件。</p>`,
+            attachments: [
+              {
+                filename: `screenshot-${stamp}.png`,
+                content: base64Content,
+                type: 'image/png',
+                disposition: 'attachment',
+              },
+            ],
+          })
+          return json({ ok: true, mode: 'cloudflare_email', message: `截图已发送至 ${to}` })
+        }
+
+        if (env.RESEND_API_KEY) {
+          const mailFrom = env.MAIL_FROM || 'Jumpl Screenshot <onboarding@resend.dev>'
+          const resp = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${env.RESEND_API_KEY}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              from: mailFrom,
+              to: [to],
+              subject,
+              html: `${contentHtml}<p>页面地址：${pageUrl || '未知'}</p><p>截图见附件。</p>`,
+              attachments: [{ filename: `screenshot-${stamp}.png`, content: base64Content }],
+            }),
+          })
+          if (!resp.ok) {
+            const errText = await resp.text().catch(() => '')
+            return json(
+              { error: `邮件服务返回错误 (${resp.status}) ${errText.slice(0, 120)}` },
+              502,
+            )
+          }
+          return json({ ok: true, mode: 'resend', message: `截图已发送至 ${to}` })
+        }
+
+        if (env.EMAIL_WEBHOOK_URL) {
+          const resp = await fetch(env.EMAIL_WEBHOOK_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              to,
+              subject,
+              content,
+              pageUrl,
+              imageDataUrl,
+              filename: `screenshot-${stamp}.png`,
+            }),
+          })
+          if (!resp.ok) {
+            return json({ error: `邮件 Webhook 返回错误 (${resp.status})` }, 502)
+          }
+          return json({ ok: true, mode: 'webhook', message: `截图已发送至 ${to}` })
+        }
+
+        return json({
+          ok: true,
+          mode: 'client_relay',
+          message: '使用免密钥邮件网关投递',
+        })
+      }
+
       const layoutMatch = pathname.match(/^\/layout\/(items|fields)\/?$/)
       if (layoutMatch) {
         const which = layoutMatch[1]

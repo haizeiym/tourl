@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Back, RefreshRight } from '@element-plus/icons-vue'
 import type { JumpStore } from '../composables/useJumpStore'
+import ScreenshotOverlay from './ScreenshotOverlay.vue'
 
 const props = defineProps<{
   store: JumpStore
@@ -338,6 +339,7 @@ onUnmounted(() => {
         title="切换横竖屏（自动 / 横屏 / 竖屏）"
         @click="toggleOrientation"
       />
+      <ScreenshotOverlay :page-url="src || ''" :target-iframe="iframeRef" />
       <span
         class="rounded bg-black/50 px-1.5 py-0.5 text-[10px] leading-4 text-white/80"
         :title="detectSource"

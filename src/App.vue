@@ -68,6 +68,12 @@ function backToList() {
   store.clearSelection()
 }
 
+async function initStoreAndLayout() {
+  await store.loadGlobalConfig({ confirmDirty: false })
+  await layout.loadLayout({ silent: true })
+  layout.syncItemOrder(store.config.value.items)
+}
+
 onMounted(() => {
   try {
     const saved = Number(localStorage.getItem(LS_WIDTH))
@@ -78,12 +84,19 @@ onMounted(() => {
     /* ignore */
   }
   window.addEventListener('resize', onWinResize)
-  void (async () => {
-    await store.loadGlobalConfig({ confirmDirty: false })
-    await layout.loadLayout({ silent: true })
-    layout.syncItemOrder(store.config.value.items)
-  })()
+  if (!store.isStandaloneTab.value) {
+    void initStoreAndLayout()
+  }
 })
+
+watch(
+  () => store.isIframePreview.value,
+  (inPreview) => {
+    if (!inPreview && store.config.value.items.length === 0 && !store.loading.value) {
+      void initStoreAndLayout()
+    }
+  },
+)
 
 onUnmounted(() => {
   window.removeEventListener('resize', onWinResize)

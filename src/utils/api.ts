@@ -545,3 +545,202 @@ export async function saveFieldLayout(layout: FieldLayoutFile): Promise<FieldLay
   const saved = await layoutGetPut('fields', layout)
   return parseFieldLayout(saved ?? layout)
 }
+
+export type SendScreenshotEmailPayload = {
+  to: string
+  imageDataUrl: string
+  pageUrl: string
+  subject?: string
+  content?: string
+}
+
+export type SendScreenshotEmailResult = {
+  ok: boolean
+  mode?: string
+  message?: string
+}
+
+function dataUrlToBlob(dataUrl: string): Blob {
+  const parts = dataUrl.split(',')
+  const base64 = parts[1] ?? ''
+  const bin = atob(base64)
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i += 1) {
+    bytes[i] = bin.charCodeAt(i)
+  }
+  return new Blob([bytes], { type: 'image/png' })
+}
+
+function ensureOriginReferrerMeta() {
+  if (typeof document === 'undefined') return
+  let meta = document.querySelector('meta[name="referrer"]') as HTMLMetaElement | null
+  if (!meta) {
+    meta = document.createElement('meta')
+    meta.name = 'referrer'
+    document.head.appendChild(meta)
+  }
+  meta.content = 'origin'
+}
+
+function getPersistentMailIframe(): HTMLIFrameElement {
+  const id = 'jumpl-formsubmit-iframe'
+  let iframe = document.getElementById(id) as HTMLIFrameElement | null
+  if (!iframe) {
+    iframe = document.createElement('iframe')
+    iframe.id = id
+    iframe.name = id
+    iframe.style.display = 'none'
+    document.body.appendChild(iframe)
+  }
+  return iframe
+}
+
+/**
+ * 免密钥表单邮件网关投递（支持真实 PNG 附件直达任意收件箱）
+ * 注意：必须将 Referer 固定为纯 origin（去掉超长 ?preview=...&token=...），
+ * 否则 FormSubmit 数据库会因 URL 超长截断导致激活链接报 Confirmation token not found。
+ */
+async function relayViaFormSubmit(
+  payload: SendScreenshotEmailPayload,
+): Promise<SendScreenshotEmailResult> {
+  ensureOriginReferrerMeta()
+  const to = payload.to.trim() || 'gcdxdy666@gmail.com'
+  const userSubject = payload.subject?.trim() ?? ''
+  const userContent = payload.content?.trim() ?? ''
+  const subject =
+    userSubject ||
+    `网页截图 (${new Date().toISOString().slice(0, 19).replace('T', ' ')})`
+  const blob = dataUrlToBlob(payload.imageDataUrl)
+  const file = new File([blob], `screenshot-${Date.now()}.png`, { type: 'image/png' })
+
+  const iframe = getPersistentMailIframe()
+
+  const form = document.createElement('form')
+  form.method = 'POST'
+  form.enctype = 'multipart/form-data'
+  form.action = `https://formsubmit.co/${encodeURIComponent(to)}`
+  form.target = iframe.name
+  form.style.display = 'none'
+
+  const fields: Record<string, string> = {
+    _subject: subject,
+    _captcha: 'false',
+    _template: 'table',
+    邮件标题: userSubject || '（未填写）',
+    邮件内容: userContent || '（未填写）',
+    页面地址: payload.pageUrl || window.location.origin,
+    发送时间: new Date().toLocaleString(),
+  }
+
+  for (const [k, v] of Object.entries(fields)) {
+    const input = document.createElement('input')
+    input.type = 'hidden'
+    input.name = k
+    input.value = v
+    form.appendChild(input)
+  }
+
+  const fileInput = document.createElement('input')
+  fileInput.type = 'file'
+  fileInput.name = 'attachment'
+  const dt = new DataTransfer()
+  dt.items.add(file)
+  fileInput.files = dt.files
+  form.appendChild(fileInput)
+
+  document.body.appendChild(form)
+
+  const savedHref = window.location.href
+  try {
+    // 临时将地址栏精简为纯路径，彻底杜绝超长 ?preview= JWT 污染 Referer
+    window.history.replaceState(null, '', window.location.pathname)
+  } catch {
+    /* ignore */
+  }
+
+  await new Promise<void>((resolve) => {
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
+      iframe.onload = null
+      iframe.onerror = null
+      form.remove()
+      resolve()
+    }
+    iframe.onload = finish
+    iframe.onerror = finish
+    window.setTimeout(finish, 12000)
+    form.submit()
+  })
+
+  try {
+    window.history.replaceState(null, '', savedHref)
+  } catch {
+    /* ignore */
+  }
+
+  return {
+    ok: true,
+    mode: 'formsubmit',
+    message: `截图邮件已提交至 ${to}（若刚才激活失败，请打开最新收到的一封激活邮件点击 Activate Form，激活一次后即可直接收图）`,
+  }
+}
+
+export async function sendScreenshotEmail(
+  payload: SendScreenshotEmailPayload,
+): Promise<SendScreenshotEmailResult> {
+  const body = JSON.stringify(payload)
+  const headers = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  }
+
+  if (import.meta.env.DEV) {
+    const res = await fetch('/api/screenshot/email', {
+      method: 'POST',
+      cache: 'no-store',
+      headers,
+      body,
+    })
+    if (!res.ok) throw new Error(await parseError(res))
+    const data = (await res.json()) as Record<string, unknown>
+    const mode = typeof data.mode === 'string' ? data.mode : ''
+    if (mode === 'local' || mode === 'client_relay') {
+      return relayViaFormSubmit(payload)
+    }
+    return {
+      ok: data.ok === true,
+      mode,
+      message: typeof data.message === 'string' ? data.message : undefined,
+    }
+  }
+
+  const cloud = await resolveCloudUrl()
+  if (cloud) {
+    try {
+      const url = withKv(resourceApiUrl(cloud, '/screenshot/email'))
+      const res = await fetch(url, {
+        method: 'POST',
+        cache: 'no-store',
+        headers,
+        body,
+      })
+      if (res.ok) {
+        const data = (await res.json()) as Record<string, unknown>
+        const mode = typeof data.mode === 'string' ? data.mode : ''
+        if (mode && mode !== 'local' && mode !== 'client_relay') {
+          return {
+            ok: data.ok === true,
+            mode,
+            message: typeof data.message === 'string' ? data.message : undefined,
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[sendScreenshotEmail] worker fallback to formsubmit', err)
+    }
+  }
+
+  return relayViaFormSubmit(payload)
+}

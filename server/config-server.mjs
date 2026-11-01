@@ -11,6 +11,7 @@ const BACKUP_DIR = path.join(ROOT, 'data', 'backup')
 const BACKUP_CONFIG = path.join(BACKUP_DIR, 'jump-config.json')
 const BACKUP_LOBBY_DIR = path.join(BACKUP_DIR, 'lobby')
 const LAYOUT_DIR = path.join(ROOT, 'data', 'layout')
+const SCREENSHOT_DIR = path.join(ROOT, 'data', 'screenshots')
 const DIST_DIR = path.join(ROOT, 'dist')
 const PORT = Number(process.env.PORT || 8787)
 const SERVE_STATIC = process.env.SERVE_STATIC === '1'
@@ -250,6 +251,103 @@ const server = http.createServer(async (req, res) => {
       const result = await snapshotLocalBackup()
       console.log(`[backup] configKeys=${result.configKeys} lobbyKeys=${result.lobbyKeys}`)
       sendJson(res, 200, result)
+      return
+    }
+
+    if ((url.pathname === '/api/screenshot/email' || url.pathname === '/screenshot/email') && method === 'POST') {
+      const body = await readBody(req)
+      const to = (typeof body?.to === 'string' ? body.to.trim() : '') || 'gcdxdy666@gmail.com'
+      const imageDataUrl = typeof body?.imageDataUrl === 'string' ? body.imageDataUrl : ''
+      const pageUrl = typeof body?.pageUrl === 'string' ? body.pageUrl : ''
+      const content = typeof body?.content === 'string' ? body.content.trim() : ''
+      const subject =
+        typeof body?.subject === 'string' && body.subject.trim()
+          ? body.subject.trim()
+          : `网页截图 (${new Date().toISOString().slice(0, 19).replace('T', ' ')})`
+
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+        sendJson(res, 400, { error: '请填写有效的收件邮箱地址' })
+        return
+      }
+      const match = imageDataUrl.match(/^data:image\/png;base64,(.+)$/)
+      if (!match?.[1]) {
+        sendJson(res, 400, { error: '截图数据格式无效（需为 PNG base64）' })
+        return
+      }
+      const base64Content = match[1]
+
+      await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
+      const stamp = Date.now()
+      const pngPath = path.join(SCREENSHOT_DIR, `screenshot-${stamp}.png`)
+      const metaPath = path.join(SCREENSHOT_DIR, `screenshot-${stamp}.json`)
+      await fs.writeFile(pngPath, Buffer.from(base64Content, 'base64'))
+      await fs.writeFile(
+        metaPath,
+        JSON.stringify(
+          { to, subject, content, pageUrl, sentAt: stamp, pngFile: path.basename(pngPath) },
+          null,
+          2,
+        ),
+        'utf8',
+      )
+
+      const contentHtml = content ? `<p>邮件内容：${content}</p>` : ''
+      const resendKey = process.env.RESEND_API_KEY
+      const webhookUrl = process.env.EMAIL_WEBHOOK_URL
+      if (resendKey) {
+        const mailFrom = process.env.MAIL_FROM || 'Jumpl Screenshot <onboarding@resend.dev>'
+        const resp = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${resendKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from: mailFrom,
+            to: [to],
+            subject,
+            html: `${contentHtml}<p>页面地址：${pageUrl || '未知'}</p><p>截图见附件。</p>`,
+            attachments: [{ filename: `screenshot-${stamp}.png`, content: base64Content }],
+          }),
+        })
+        if (!resp.ok) {
+          const errText = await resp.text().catch(() => '')
+          sendJson(res, 502, { error: `邮件服务返回错误 (${resp.status}) ${errText.slice(0, 120)}` })
+          return
+        }
+        console.log(`[screenshot-email] sent via Resend to=${to}`)
+        sendJson(res, 200, { ok: true, mode: 'resend', message: `截图已发送至 ${to}` })
+        return
+      }
+
+      if (webhookUrl) {
+        const resp = await fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to,
+            subject,
+            content,
+            pageUrl,
+            imageDataUrl,
+            filename: `screenshot-${stamp}.png`,
+          }),
+        })
+        if (!resp.ok) {
+          sendJson(res, 502, { error: `邮件 Webhook 返回错误 (${resp.status})` })
+          return
+        }
+        console.log(`[screenshot-email] sent via webhook to=${to}`)
+        sendJson(res, 200, { ok: true, mode: 'webhook', message: `截图已发送至 ${to}` })
+        return
+      }
+
+      console.log(`[screenshot-email] saved locally to=${to} file=${pngPath}`)
+      sendJson(res, 200, {
+        ok: true,
+        mode: 'local',
+        message: `已投递截图至 ${to}（本地开发已保存至 data/screenshots/${path.basename(pngPath)}）`,
+      })
       return
     }
 

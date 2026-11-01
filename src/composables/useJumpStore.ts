@@ -31,12 +31,32 @@ import {
   writeLocalLobbyUser,
 } from '../utils/lobby'
 
+function readInitialPreviewUrl(): string | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = new URLSearchParams(window.location.search).get('preview')?.trim() ?? ''
+    return isHttpUrl(raw) ? raw : null
+  } catch {
+    return null
+  }
+}
+
+export function buildPreviewTabUrl(targetUrl: string): string {
+  const u = new URL(window.location.href)
+  u.search = ''
+  u.hash = ''
+  u.searchParams.set('preview', targetUrl)
+  return u.toString()
+}
+
 export function useJumpStore() {
+  const initialPreview = readInitialPreviewUrl()
   const config = ref<JumpConfigFile>(createEmptyConfig())
   const selectedId = ref<string | null>(null)
   const dirty = ref(false)
   const lobbyDirty = ref(false)
-  const iframeSrc = ref<string | null>(null)
+  const iframeSrc = ref<string | null>(initialPreview)
+  const isStandaloneTab = ref(Boolean(initialPreview))
   const focusNameToken = ref(0)
   const loading = ref(false)
   const saving = ref(false)
@@ -179,7 +199,9 @@ export function useJumpStore() {
     config.value = next
     selectedId.value = null
     if (clearDirty) dirty.value = false
-    closeIframe()
+    if (!isStandaloneTab.value) {
+      closeIframe()
+    }
   }
 
   async function loadGlobalConfig(opts?: { confirmDirty?: boolean }) {
@@ -532,6 +554,19 @@ export function useJumpStore() {
   }
 
   function closeIframe() {
+    if (isStandaloneTab.value) {
+      isStandaloneTab.value = false
+      try {
+        window.history.replaceState(null, '', window.location.pathname)
+      } catch {
+        /* ignore */
+      }
+      try {
+        window.close()
+      } catch {
+        /* ignore */
+      }
+    }
     iframeSrc.value = null
   }
 
@@ -557,7 +592,7 @@ export function useJumpStore() {
 
     if (item.kind === 'lobby') {
       const lobby = lobbyById[item.id] ?? createDefaultLobbyConfig()
-      // 新标签模式：在 await 之前先同步打开空白页，拿到地址后再导航，避免 Safari 拦截
+      // 新标签模式：在 await 之前先同步打开空白页，拿到地址后再导航到包装预览页，避免 Safari 拦截
       const preWin = item.openMode === 'iframe' ? null : openBlankTab()
       if (item.openMode !== 'iframe' && !preWin) {
         ElMessage.warning('弹窗被拦截，请允许本站打开新标签页，或改用「当前页」打开')
@@ -570,9 +605,10 @@ export function useJumpStore() {
           iframeSrc.value = finalUrl
           return
         }
+        const wrapperUrl = buildPreviewTabUrl(finalUrl)
         if (preWin && !preWin.closed) {
-          preWin.location.href = finalUrl
-        } else if (!openBlankTab(finalUrl)) {
+          preWin.location.href = wrapperUrl
+        } else if (!openBlankTab(wrapperUrl)) {
           ElMessage.warning('弹窗被拦截，请允许本站打开新标签页')
         }
       } catch (err) {
@@ -608,7 +644,8 @@ export function useJumpStore() {
       return
     }
 
-    if (!openBlankTab(finalUrl)) {
+    const wrapperUrl = buildPreviewTabUrl(finalUrl)
+    if (!openBlankTab(wrapperUrl)) {
       ElMessage.warning('弹窗被拦截，请允许本站打开新标签页，或改用「当前页」打开')
     }
   }
@@ -621,6 +658,7 @@ export function useJumpStore() {
     dirty,
     lobbyDirty,
     iframeSrc,
+    isStandaloneTab,
     isIframePreview,
     focusNameToken,
     loading,
