@@ -548,7 +548,15 @@ export async function saveFieldLayout(layout: FieldLayoutFile): Promise<FieldLay
 
 export type SendScreenshotEmailPayload = {
   to: string
-  imageDataUrl: string
+  imageDataUrl?: string
+  coverImageDataUrl?: string
+  mediaBlob?: Blob
+  mediaFilename?: string
+  mediaMimeType?: string
+  durationSec?: number
+  windowWidth?: number
+  windowHeight?: number
+  maxBytes?: number
   pageUrl: string
   subject?: string
   content?: string
@@ -557,18 +565,33 @@ export type SendScreenshotEmailPayload = {
 export type SendScreenshotEmailResult = {
   ok: boolean
   mode?: string
+  publicFileUrl?: string
   message?: string
 }
 
-function dataUrlToBlob(dataUrl: string): Blob {
-  const parts = dataUrl.split(',')
-  const base64 = parts[1] ?? ''
+function dataUrlToBlob(dataUrl: string, fallbackType = 'image/png'): Blob {
+  const marker = ';base64,'
+  const idx = dataUrl.indexOf(marker)
+  const header = idx >= 0 ? dataUrl.slice(0, idx) : ''
+  const mime = header.startsWith('data:')
+    ? header.slice(5).split(';')[0] || fallbackType
+    : fallbackType
+  const base64 = idx >= 0 ? dataUrl.slice(idx + marker.length) : ''
   const bin = atob(base64)
   const bytes = new Uint8Array(bin.length)
   for (let i = 0; i < bin.length; i += 1) {
     bytes[i] = bin.charCodeAt(i)
   }
-  return new Blob([bytes], { type: 'image/png' })
+  return new Blob([bytes], { type: mime })
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = () => reject(new Error('读取媒体数据失败'))
+    reader.readAsDataURL(blob)
+  })
 }
 
 function ensureOriginReferrerMeta() {
@@ -595,25 +618,16 @@ function getPersistentMailIframe(): HTMLIFrameElement {
   return iframe
 }
 
-/**
- * 免密钥表单邮件网关投递（支持真实 PNG 附件直达任意收件箱）
- * 注意：必须将 Referer 固定为纯 origin（去掉超长 ?preview=...&token=...），
- * 否则 FormSubmit 数据库会因 URL 超长截断导致激活链接报 Confirmation token not found。
- */
-async function relayViaFormSubmit(
-  payload: SendScreenshotEmailPayload,
-): Promise<SendScreenshotEmailResult> {
-  ensureOriginReferrerMeta()
-  const to = payload.to.trim() || 'gcdxdy666@gmail.com'
-  const userSubject = payload.subject?.trim() ?? ''
-  const userContent = payload.content?.trim() ?? ''
-  const subject =
-    userSubject ||
-    `网页截图 (${new Date().toISOString().slice(0, 19).replace('T', ' ')})`
-  const blob = dataUrlToBlob(payload.imageDataUrl)
-  const file = new File([blob], `screenshot-${Date.now()}.png`, { type: 'image/png' })
+const FORMSUBMIT_MAX_ATTACH_BYTES = 4_500_000
 
+async function submitFormToIframe(
+  to: string,
+  fields: Record<string, string>,
+  attachFile?: File | null,
+): Promise<boolean> {
   const iframe = getPersistentMailIframe()
+  const nextToken = `mail_ok=1&t=${Date.now()}`
+  const nextUrl = `${window.location.origin}/?${nextToken}`
 
   const form = document.createElement('form')
   form.method = 'POST'
@@ -622,17 +636,12 @@ async function relayViaFormSubmit(
   form.target = iframe.name
   form.style.display = 'none'
 
-  const fields: Record<string, string> = {
-    _subject: subject,
-    _captcha: 'false',
-    _template: 'table',
-    邮件标题: userSubject || '（未填写）',
-    邮件内容: userContent || '（未填写）',
-    页面地址: payload.pageUrl || window.location.origin,
-    发送时间: new Date().toLocaleString(),
+  const allFields: Record<string, string> = {
+    ...fields,
+    _next: nextUrl,
   }
 
-  for (const [k, v] of Object.entries(fields)) {
+  for (const [k, v] of Object.entries(allFields)) {
     const input = document.createElement('input')
     input.type = 'hidden'
     input.name = k
@@ -640,13 +649,15 @@ async function relayViaFormSubmit(
     form.appendChild(input)
   }
 
-  const fileInput = document.createElement('input')
-  fileInput.type = 'file'
-  fileInput.name = 'attachment'
-  const dt = new DataTransfer()
-  dt.items.add(file)
-  fileInput.files = dt.files
-  form.appendChild(fileInput)
+  if (attachFile && attachFile.size > 0) {
+    const fileInput = document.createElement('input')
+    fileInput.type = 'file'
+    fileInput.name = 'attachment'
+    const dt = new DataTransfer()
+    dt.items.add(attachFile)
+    fileInput.files = dt.files
+    form.appendChild(fileInput)
+  }
 
   document.body.appendChild(form)
 
@@ -658,19 +669,30 @@ async function relayViaFormSubmit(
     /* ignore */
   }
 
-  await new Promise<void>((resolve) => {
+  const redirectedOk = await new Promise<boolean>((resolve) => {
     let settled = false
-    const finish = () => {
+    const finish = (ok: boolean) => {
       if (settled) return
       settled = true
       iframe.onload = null
       iframe.onerror = null
       form.remove()
-      resolve()
+      resolve(ok)
     }
-    iframe.onload = finish
-    iframe.onerror = finish
-    window.setTimeout(finish, 12000)
+    iframe.onload = () => {
+      try {
+        const href = iframe.contentWindow?.location?.href ?? ''
+        if (href.includes('mail_ok=1')) {
+          finish(true)
+          return
+        }
+      } catch {
+        // 跨域说明停留在 formsubmit.co（未跳转到同源 _next，例如视频附件被拒）
+      }
+      finish(false)
+    }
+    iframe.onerror = () => finish(false)
+    window.setTimeout(() => finish(false), 10000)
     form.submit()
   })
 
@@ -680,44 +702,338 @@ async function relayViaFormSubmit(
     /* ignore */
   }
 
+  return redirectedOk
+}
+
+/**
+ * 当视频二进制无法直传时，将 publicFileUrl 发送到邮箱（优先 AJAX JSON 投递，备选挂载 PNG 预览帧表单投递）
+ */
+async function sendPublicUrlFallback(
+  to: string,
+  fields: Record<string, string>,
+  coverImageDataUrl?: string,
+): Promise<void> {
+  const savedHref = window.location.href
+  try {
+    window.history.replaceState(null, '', window.location.pathname)
+  } catch {
+    /* ignore */
+  }
+
+  let ajaxSent = false
+  try {
+    const res = await fetch(`https://formsubmit.co/ajax/${encodeURIComponent(to)}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(fields),
+    })
+    if (res.ok) {
+      const data = (await res.json()) as Record<string, unknown>
+      if (data.success === 'true' || data.success === true) {
+        ajaxSent = true
+      }
+    }
+  } catch {
+    /* fallback to form below */
+  } finally {
+    try {
+      window.history.replaceState(null, '', savedHref)
+    } catch {
+      /* ignore */
+    }
+  }
+
+  if (ajaxSent) return
+
+  const coverBlob = coverImageDataUrl
+    ? dataUrlToBlob(coverImageDataUrl, 'image/png')
+    : null
+  const coverFile =
+    coverBlob && coverBlob.size > 0
+      ? new File([coverBlob], `recording-preview-${Date.now()}.png`, { type: 'image/png' })
+      : null
+  await submitFormToIframe(to, fields, coverFile)
+}
+
+/**
+ * 浏览器端直传公共临时云存储，获取真实可访问的 HTTPS 视频直链（避免静态站点无后端导致 404）
+ */
+async function uploadVideoDirectFromBrowser(blob: Blob, filename: string): Promise<string> {
+  if (!blob || blob.size === 0) return ''
+  // 1. tmpfiles.org (支持浏览器 CORS)
+  try {
+    const fd = new FormData()
+    fd.append('file', blob, filename)
+    const res = await fetch('https://tmpfiles.org/api/v1/upload', {
+      method: 'POST',
+      body: fd,
+    })
+    if (res.ok) {
+      const data = (await res.json()) as { data?: { url?: string } }
+      const rawUrl = typeof data?.data?.url === 'string' ? data.data.url : ''
+      if (rawUrl) {
+        return rawUrl.replace('http://', 'https://').replace('://tmpfiles.org/', '://tmpfiles.org/dl/')
+      }
+    }
+  } catch {
+    /* try next */
+  }
+
+  // 2. uguu.se (支持浏览器 CORS)
+  try {
+    const fd = new FormData()
+    fd.append('files[]', blob, filename)
+    const res = await fetch('https://uguu.se/upload', {
+      method: 'POST',
+      body: fd,
+    })
+    if (res.ok) {
+      const data = (await res.json()) as { files?: Array<{ url?: string }> }
+      const url = data?.files?.[0]?.url
+      if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+        return url
+      }
+    }
+  } catch {
+    /* try next */
+  }
+
+  // 3. litterbox.catbox.moe
+  try {
+    const fd = new FormData()
+    fd.append('reqtype', 'fileupload')
+    fd.append('time', '72h')
+    fd.append('fileToUpload', blob, filename)
+    const res = await fetch('https://litterbox.catbox.moe/resources/internals/api.php', {
+      method: 'POST',
+      body: fd,
+    })
+    if (res.ok) {
+      const text = (await res.text()).trim()
+      if (/^https?:\/\//i.test(text)) {
+        return text
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  return ''
+}
+
+/**
+ * 免密钥表单邮件网关投递：
+ * - 截图：直接挂载 PNG 附件发送
+ * - 录屏：优先尝试直接发送 MP4 视频附件（≤ 4.5MB）；如果视频发送不了（体积超限或被邮件网关拒收），自动降级将 publicFileUrl 发送到邮箱
+ */
+async function relayViaFormSubmit(
+  payload: SendScreenshotEmailPayload,
+  serverFileUrl?: string,
+  localFileUrl?: string,
+): Promise<SendScreenshotEmailResult> {
+  ensureOriginReferrerMeta()
+  const to = payload.to.trim() || 'gcdxdy666@gmail.com'
+  const isVideo = Boolean(
+    payload.mediaMimeType?.startsWith('video/') || payload.mediaBlob?.type.startsWith('video/'),
+  )
+  const kindLabel = isVideo ? '网页录屏' : '网页截图'
+  const userSubject = payload.subject?.trim() ?? ''
+  const userContent = payload.content?.trim() ?? ''
+  const subject =
+    userSubject ||
+    `${kindLabel} (${new Date().toISOString().slice(0, 19).replace('T', ' ')})`
+
+  const mimeType =
+    payload.mediaMimeType ||
+    payload.mediaBlob?.type ||
+    'image/png'
+  const blob =
+    payload.mediaBlob ??
+    (payload.imageDataUrl ? dataUrlToBlob(payload.imageDataUrl, mimeType) : new Blob([]))
+  const defaultExt = isVideo ? (mimeType.includes('mp4') ? 'mp4' : 'webm') : 'png'
+  const filename =
+    payload.mediaFilename || `${isVideo ? 'recording' : 'screenshot'}-${Date.now()}.${defaultExt}`
+
+  const sizeMb = (blob.size / (1024 * 1024)).toFixed(2)
+  let resolvedPublicUrl = serverFileUrl || localFileUrl || ''
+  if (isVideo && (!resolvedPublicUrl || resolvedPublicUrl.includes('/api/screenshot/file/'))) {
+    const browserCloudUrl = await uploadVideoDirectFromBrowser(blob, filename)
+    if (browserCloudUrl) {
+      resolvedPublicUrl = browserCloudUrl
+    }
+  }
+
+  const fields: Record<string, string> = {
+    _subject: subject,
+    _captcha: 'false',
+    _template: 'table',
+    类型: isVideo
+      ? `录屏视频 (${sizeMb} MB · ${blob.size.toLocaleString()} Bytes${payload.durationSec ? ` · ${payload.durationSec}s` : ''})`
+      : `网页截图 (${sizeMb} MB)`,
+    邮件标题: userSubject || '（未填写）',
+    邮件内容: userContent || '（未填写）',
+    页面地址: payload.pageUrl || window.location.origin,
+    发送时间: new Date().toLocaleString(),
+  }
+
+  if (isVideo) {
+    if (payload.windowWidth && payload.windowHeight) {
+      fields['录屏窗口大小'] = `${payload.windowWidth} × ${payload.windowHeight} px`
+    }
+    if (payload.maxBytes) {
+      fields['设置最大字节量'] = `${payload.maxBytes.toLocaleString()} Bytes (${(payload.maxBytes / (1024 * 1024)).toFixed(2)} MB)`
+    }
+    if (resolvedPublicUrl) {
+      fields['publicFileUrl'] = resolvedPublicUrl
+      fields['视频在线播放/下载直链'] = resolvedPublicUrl
+    }
+    if (localFileUrl && localFileUrl !== resolvedPublicUrl) {
+      fields['本地播放/下载直链'] = localFileUrl
+    }
+  }
+
+  if (!isVideo) {
+    const pngFile =
+      blob.size > 0 && blob.size <= FORMSUBMIT_MAX_ATTACH_BYTES
+        ? new File([blob], filename, { type: 'image/png' })
+        : null
+    await submitFormToIframe(to, fields, pngFile)
+    return {
+      ok: true,
+      mode: 'formsubmit',
+      message: `${kindLabel}已发送至 ${to}`,
+    }
+  }
+
+  // 1. 尝试直接发送视频附件（要求在网关字节上限内且为 MP4 兼容格式）
+  const canTryVideoAttach =
+    blob.size > 0 &&
+    blob.size <= FORMSUBMIT_MAX_ATTACH_BYTES &&
+    mimeType.includes('mp4')
+
+  if (canTryVideoAttach) {
+    const videoFile = new File([blob], filename, { type: 'video/mp4' })
+    const sentVideoOk = await submitFormToIframe(to, fields, videoFile)
+    if (sentVideoOk) {
+      return {
+        ok: true,
+        mode: 'formsubmit_video',
+        publicFileUrl: resolvedPublicUrl,
+        message: `录屏视频已直接发送至 ${to}`,
+      }
+    }
+  }
+
+  // 2. 如果视频发送不了（超出字节上限或网关拦截视频附件），则发送 publicFileUrl 到邮箱
+  await sendPublicUrlFallback(to, fields, payload.coverImageDataUrl)
+
   return {
     ok: true,
-    mode: 'formsubmit',
-    message: `截图邮件已提交至 ${to}（若刚才激活失败，请打开最新收到的一封激活邮件点击 Activate Form，激活一次后即可直接收图）`,
+    mode: 'formsubmit_url_fallback',
+    publicFileUrl: resolvedPublicUrl,
+    message: `已将录屏链接 (publicFileUrl) 发送至 ${to}`,
   }
 }
 
 export async function sendScreenshotEmail(
   payload: SendScreenshotEmailPayload,
 ): Promise<SendScreenshotEmailResult> {
-  const body = JSON.stringify(payload)
+  const dataUrl =
+    payload.imageDataUrl ??
+    (payload.mediaBlob ? await blobToDataUrl(payload.mediaBlob) : '')
+  const body = JSON.stringify({
+    to: payload.to,
+    imageDataUrl: dataUrl,
+    mediaFilename: payload.mediaFilename,
+    mediaMimeType: payload.mediaMimeType || payload.mediaBlob?.type,
+    durationSec: payload.durationSec,
+    windowWidth: payload.windowWidth,
+    windowHeight: payload.windowHeight,
+    maxBytes: payload.maxBytes,
+    pageUrl: payload.pageUrl,
+    subject: payload.subject,
+    content: payload.content,
+  })
   const headers = {
     'Content-Type': 'application/json',
     Accept: 'application/json',
   }
 
+  let serverFileUrl: string | undefined
+  let localFileUrl: string | undefined
+
   if (import.meta.env.DEV) {
-    const res = await fetch('/api/screenshot/email', {
+    try {
+      const res = await fetch('/api/screenshot/email', {
+        method: 'POST',
+        cache: 'no-store',
+        headers,
+        body,
+      })
+      if (res.ok) {
+        const data = (await res.json()) as Record<string, unknown>
+        if (typeof data.publicFileUrl === 'string' && data.publicFileUrl) {
+          serverFileUrl = data.publicFileUrl
+        } else if (typeof data.fileUrl === 'string' && data.fileUrl) {
+          serverFileUrl = data.fileUrl
+        }
+        if (typeof data.localFileUrl === 'string' && data.localFileUrl) {
+          localFileUrl = data.localFileUrl
+        }
+        const mode = typeof data.mode === 'string' ? data.mode : ''
+        if (mode && mode !== 'local' && mode !== 'client_relay') {
+          return {
+            ok: data.ok === true,
+            mode,
+            publicFileUrl: serverFileUrl,
+            message: typeof data.message === 'string' ? data.message : undefined,
+          }
+        }
+      } else {
+        console.warn('[sendScreenshotEmail] dev server returned', res.status, 'falling back to relay')
+      }
+    } catch (err) {
+      console.warn('[sendScreenshotEmail] dev server request failed, falling back to relay', err)
+    }
+    return relayViaFormSubmit(payload, serverFileUrl, localFileUrl)
+  }
+
+  // 生产环境 1：尝试同源 PHP 落盘接口 (/screenshot.php) 并校验文件真实可访问
+  try {
+    const phpRes = await fetch('/screenshot.php', {
       method: 'POST',
       cache: 'no-store',
       headers,
       body,
     })
-    if (!res.ok) throw new Error(await parseError(res))
-    const data = (await res.json()) as Record<string, unknown>
-    const mode = typeof data.mode === 'string' ? data.mode : ''
-    if (mode === 'local' || mode === 'client_relay') {
-      return relayViaFormSubmit(payload)
+    if (phpRes.ok) {
+      const ct = phpRes.headers.get('content-type') ?? ''
+      if (ct.includes('application/json')) {
+        const data = (await phpRes.json()) as Record<string, unknown>
+        const candidateUrl =
+          typeof data.publicFileUrl === 'string'
+            ? data.publicFileUrl
+            : typeof data.fileUrl === 'string'
+              ? data.fileUrl
+              : ''
+        if (candidateUrl) {
+          const check = await fetch(candidateUrl, { method: 'HEAD', cache: 'no-store' }).catch(() => null)
+          if (check && check.ok) {
+            serverFileUrl = candidateUrl
+          }
+        }
+      }
     }
-    return {
-      ok: data.ok === true,
-      mode,
-      message: typeof data.message === 'string' ? data.message : undefined,
-    }
+  } catch {
+    /* ignore */
   }
 
+  // 生产环境 2：尝试 Cloudflare Worker (/screenshot/email)
   const cloud = await resolveCloudUrl()
-  if (cloud) {
+  if (cloud && !serverFileUrl) {
     try {
       const url = withKv(resourceApiUrl(cloud, '/screenshot/email'))
       const res = await fetch(url, {
@@ -728,11 +1044,17 @@ export async function sendScreenshotEmail(
       })
       if (res.ok) {
         const data = (await res.json()) as Record<string, unknown>
+        if (typeof data.publicFileUrl === 'string' && data.publicFileUrl) {
+          serverFileUrl = data.publicFileUrl
+        } else if (typeof data.fileUrl === 'string' && data.fileUrl) {
+          serverFileUrl = data.fileUrl
+        }
         const mode = typeof data.mode === 'string' ? data.mode : ''
         if (mode && mode !== 'local' && mode !== 'client_relay') {
           return {
             ok: data.ok === true,
             mode,
+            publicFileUrl: serverFileUrl,
             message: typeof data.message === 'string' ? data.message : undefined,
           }
         }
@@ -742,5 +1064,5 @@ export async function sendScreenshotEmail(
     }
   }
 
-  return relayViaFormSubmit(payload)
+  return relayViaFormSubmit(payload, serverFileUrl, localFileUrl)
 }

@@ -9,6 +9,8 @@ import {
   FullScreen,
   Message,
   Setting,
+  VideoCamera,
+  VideoPause,
 } from '@element-plus/icons-vue'
 import { sendScreenshotEmail } from '../utils/api'
 
@@ -18,21 +20,81 @@ const props = defineProps<{
 }>()
 
 const LS_EMAIL_KEY = 'jumpl.screenshotEmail'
+const LS_REC_WIDTH_KEY = 'jumpl.recordWidth'
+const LS_REC_HEIGHT_KEY = 'jumpl.recordHeight'
+const LS_REC_MAX_BYTES_KEY = 'jumpl.recordMaxBytes'
+const LS_REC_FORMAT_KEY = 'jumpl.recordFormat'
+
 const DEFAULT_EMAIL = 'gcdxdy666@gmail.com'
 const MIN_BOX_SIZE = 60
 
+/**
+ * 录屏参数与字节上限：
+ * - 默认最大字节量 4,500,000 Bytes (≈ 4.29 MB)，适配邮件网关 5MB 附件直发上限
+ * - 最高可调至 30 MB (31,457,280 Bytes)，最低 500,000 Bytes
+ * - 根据设定的最大字节量自动计算目标视频码率，确保录满最大字节量时可录制时长 ≥ 60 秒
+ */
+const DEFAULT_MAX_VIDEO_BYTES = 4_500_000
+const HARD_MAX_VIDEO_BYTES = 30 * 1024 * 1024
+const MIN_VIDEO_BYTES = 500_000
+const TARGET_AUDIO_BPS = 32_000
+
 type ResizeDir = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
+type OverlayMode = 'image' | 'video'
+type VideoFormatPref = 'mp4' | 'webm'
+
+const WINDOW_PRESETS = [
+  { label: '1280×720 (720P 推荐)', w: 1280, h: 720 },
+  { label: '960×540 (540P 轻量)', w: 960, h: 540 },
+  { label: '854×480 (480P 极速)', w: 854, h: 480 },
+  { label: '640×360 (360P 小体积)', w: 640, h: 360 },
+  { label: '1920×1080 (1080P 高清)', w: 1920, h: 1080 },
+] as const
+
+const MAX_BYTES_PRESETS = [
+  { label: '4,500,000 B (≈4.3MB 邮件直发)', bytes: 4_500_000 },
+  { label: '2,097,152 B (2MB 极速直发)', bytes: 2 * 1024 * 1024 },
+  { label: '10,485,760 B (10MB 中长录屏)', bytes: 10 * 1024 * 1024 },
+  { label: '31,457,280 B (30MB 最大上限)', bytes: 30 * 1024 * 1024 },
+] as const
 
 const active = ref(false)
+const overlayMode = ref<OverlayMode>('image')
 const capturing = ref(false)
 const sending = ref(false)
 const capturedDataUrl = ref<string>('')
 const naturalSize = reactive({ width: 0, height: 0 })
 
+/** 录屏可配置参数：窗口宽高、最大字节量、格式偏好 */
+const recordWidth = ref(1280)
+const recordHeight = ref(720)
+const maxVideoBytes = ref(DEFAULT_MAX_VIDEO_BYTES)
+const preferredFormat = ref<VideoFormatPref>('mp4')
+const showRecordSettings = ref(false)
+
+/** 录屏运行状态 */
+const recording = ref(false)
+const recordedBytes = ref(0)
+const recordedSeconds = ref(0)
+const recordedVideoBlob = ref<Blob | null>(null)
+const recordedVideoUrl = ref<string>('')
+const recordedMimeType = ref<string>('video/mp4')
+const recordedCoverDataUrl = ref<string>('')
+const videoPreviewRef = ref<HTMLVideoElement | null>(null)
+
+let activeRecorder: MediaRecorder | null = null
+let activeStream: MediaStream | null = null
+let activeCanvasStream: MediaStream | null = null
+let activeCanvasPump: number | undefined
+let activeSourceVideo: HTMLVideoElement | null = null
+let recordChunks: Blob[] = []
+let recordTimer: number | undefined
+let recordStartAt = 0
+
 const vw = ref(window.innerWidth)
 const vh = ref(window.innerHeight)
 
-/** 截图框范围（视口像素坐标） */
+/** 截图框 / 录屏预览框范围（视口像素坐标） */
 const cropRect = reactive({
   x: 80,
   y: 60,
@@ -46,15 +108,65 @@ const mailContent = ref('')
 const editingEmail = ref(false)
 const emailInputRef = ref<HTMLInputElement | null>(null)
 
-function loadSavedEmail() {
+function loadSavedSettings() {
   try {
-    const saved = localStorage.getItem(LS_EMAIL_KEY)?.trim() ?? ''
-    email.value = saved || DEFAULT_EMAIL
+    const savedEmail = localStorage.getItem(LS_EMAIL_KEY)?.trim() ?? ''
+    email.value = savedEmail || DEFAULT_EMAIL
     editingEmail.value = false
+
+    const savedW = Number(localStorage.getItem(LS_REC_WIDTH_KEY))
+    const savedH = Number(localStorage.getItem(LS_REC_HEIGHT_KEY))
+    if (Number.isFinite(savedW) && savedW >= 160 && savedW <= 3840) {
+      recordWidth.value = Math.round(savedW)
+    }
+    if (Number.isFinite(savedH) && savedH >= 120 && savedH <= 2160) {
+      recordHeight.value = Math.round(savedH)
+    }
+
+    const savedMax = Number(localStorage.getItem(LS_REC_MAX_BYTES_KEY))
+    if (Number.isFinite(savedMax) && savedMax >= MIN_VIDEO_BYTES && savedMax <= HARD_MAX_VIDEO_BYTES) {
+      maxVideoBytes.value = Math.round(savedMax)
+    }
+
+    const savedFmt = localStorage.getItem(LS_REC_FORMAT_KEY)
+    if (savedFmt === 'mp4' || savedFmt === 'webm') {
+      preferredFormat.value = savedFmt
+    }
   } catch {
     email.value = DEFAULT_EMAIL
     editingEmail.value = false
   }
+}
+
+function saveRecordSettings() {
+  recordWidth.value = Math.min(3840, Math.max(160, Math.round(Number(recordWidth.value) || 1280)))
+  recordHeight.value = Math.min(2160, Math.max(120, Math.round(Number(recordHeight.value) || 720)))
+  maxVideoBytes.value = Math.min(
+    HARD_MAX_VIDEO_BYTES,
+    Math.max(MIN_VIDEO_BYTES, Math.round(Number(maxVideoBytes.value) || DEFAULT_MAX_VIDEO_BYTES)),
+  )
+  try {
+    localStorage.setItem(LS_REC_WIDTH_KEY, String(recordWidth.value))
+    localStorage.setItem(LS_REC_HEIGHT_KEY, String(recordHeight.value))
+    localStorage.setItem(LS_REC_MAX_BYTES_KEY, String(maxVideoBytes.value))
+    localStorage.setItem(LS_REC_FORMAT_KEY, preferredFormat.value)
+  } catch {
+    /* ignore */
+  }
+}
+
+function applyWindowPreset(w: number, h: number) {
+  recordWidth.value = w
+  recordHeight.value = h
+  saveRecordSettings()
+  if (active.value && overlayMode.value === 'video') {
+    fitCropRectToRecordSize()
+  }
+}
+
+function applyMaxBytesPreset(bytes: number) {
+  maxVideoBytes.value = bytes
+  saveRecordSettings()
 }
 
 function isValidEmail(val: string): boolean {
@@ -98,6 +210,18 @@ function resetDefaultCropRect() {
   cropRect.y = marginY
   cropRect.w = Math.max(MIN_BOX_SIZE, vw.value - marginX * 2)
   cropRect.h = Math.max(MIN_BOX_SIZE, vh.value - marginY * 2 - 44)
+}
+
+function fitCropRectToRecordSize() {
+  vw.value = window.innerWidth
+  vh.value = window.innerHeight
+  const maxW = Math.max(MIN_BOX_SIZE, vw.value - 48)
+  const maxH = Math.max(MIN_BOX_SIZE, vh.value - 100)
+  const ratio = Math.min(1, maxW / recordWidth.value, maxH / recordHeight.value)
+  cropRect.w = Math.max(MIN_BOX_SIZE, Math.round(recordWidth.value * ratio))
+  cropRect.h = Math.max(MIN_BOX_SIZE, Math.round(recordHeight.value * ratio))
+  cropRect.x = Math.max(0, Math.round((vw.value - cropRect.w) / 2))
+  cropRect.y = Math.max(0, Math.round((vh.value - cropRect.h - 44) / 2))
 }
 
 function selectFullScreen() {
@@ -185,8 +309,9 @@ function buildFallbackCanvas(): { dataUrl: string; width: number; height: number
  * 调用浏览器原生 getDisplayMedia 截取全屏（包含 F12 控制台与跨域游戏画面）
  */
 async function triggerScreenshot() {
-  if (capturing.value) return
+  if (capturing.value || recording.value) return
   capturing.value = true
+  showRecordSettings.value = false
   try {
     if (navigator.mediaDevices && typeof navigator.mediaDevices.getDisplayMedia === 'function') {
       const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -209,7 +334,6 @@ async function triggerScreenshot() {
           video.onerror = () => reject(new Error('视频流加载失败'))
         })
 
-        // 等待一帧及共享弹窗淡出，确保截到干净的全屏+控制台画面
         await new Promise((r) => window.setTimeout(r, 180))
 
         const width = video.videoWidth || window.innerWidth
@@ -235,12 +359,12 @@ async function triggerScreenshot() {
       ElMessage.info('当前环境不支持原生屏幕捕获，已使用页面画布快照')
     }
 
-    loadSavedEmail()
+    overlayMode.value = 'image'
+    loadSavedSettings()
     resetDefaultCropRect()
     active.value = true
   } catch (err) {
     if (err instanceof DOMException && err.name === 'NotAllowedError') {
-      // 用户取消了屏幕共享选择器，静默返回
       return
     }
     console.warn('[triggerScreenshot] getDisplayMedia failed, using fallback', err)
@@ -248,7 +372,8 @@ async function triggerScreenshot() {
     capturedDataUrl.value = fallback.dataUrl
     naturalSize.width = fallback.width
     naturalSize.height = fallback.height
-    loadSavedEmail()
+    overlayMode.value = 'image'
+    loadSavedSettings()
     resetDefaultCropRect()
     active.value = true
   } finally {
@@ -256,9 +381,255 @@ async function triggerScreenshot() {
   }
 }
 
+/**
+ * 优选邮件可发送与接收的视频编码格式（默认优先 MP4 H.264/AVC1，兼容所有邮箱客户端与网关）
+ */
+function pickBestRecorderMimeType(pref: VideoFormatPref): { codecMime: string; containerMime: string } {
+  const mp4Candidates = [
+    'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+    'video/mp4;codecs=avc1,mp4a.40.2',
+    'video/mp4;codecs=avc1',
+    'video/mp4;codecs=h264',
+    'video/mp4',
+  ]
+  const webmCandidates = [
+    'video/webm;codecs=h264',
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=av01,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm',
+  ]
+  const candidates =
+    pref === 'mp4'
+      ? [...mp4Candidates, ...webmCandidates]
+      : [...webmCandidates, ...mp4Candidates]
+
+  if (typeof MediaRecorder !== 'undefined') {
+    for (const mime of candidates) {
+      if (MediaRecorder.isTypeSupported(mime)) {
+        const containerMime =
+          pref === 'mp4' || mime.startsWith('video/mp4') ? 'video/mp4' : 'video/webm'
+        return { codecMime: mime, containerMime }
+      }
+    }
+  }
+  return {
+    codecMime: '',
+    containerMime: pref === 'mp4' ? 'video/mp4' : 'video/webm',
+  }
+}
+
+/**
+ * 根据设定的最大字节量计算目标视频码率，确保在设定字节量上限内至少可录制 60 秒以上
+ */
+function computeTargetVideoBps(limitBytes: number): number {
+  const maxTotalBpsFor65s = Math.floor((limitBytes * 8) / 65)
+  const videoBps = maxTotalBpsFor65s - TARGET_AUDIO_BPS
+  return Math.min(2_200_000, Math.max(220_000, videoBps))
+}
+
+function clearRecordTimer() {
+  if (recordTimer !== undefined) {
+    window.clearInterval(recordTimer)
+    recordTimer = undefined
+  }
+  if (activeCanvasPump !== undefined) {
+    window.clearInterval(activeCanvasPump)
+    activeCanvasPump = undefined
+  }
+}
+
+function stopActiveStream() {
+  if (activeCanvasStream) {
+    activeCanvasStream.getTracks().forEach((t) => t.stop())
+    activeCanvasStream = null
+  }
+  if (activeSourceVideo) {
+    activeSourceVideo.pause()
+    activeSourceVideo.srcObject = null
+    activeSourceVideo = null
+  }
+  if (activeStream) {
+    activeStream.getTracks().forEach((t) => t.stop())
+    activeStream = null
+  }
+}
+
+function revokeVideoUrl() {
+  if (recordedVideoUrl.value) {
+    URL.revokeObjectURL(recordedVideoUrl.value)
+    recordedVideoUrl.value = ''
+  }
+}
+
+async function startRecording() {
+  if (recording.value || capturing.value) return
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function') {
+    ElMessage.error('当前浏览器环境不支持屏幕录制 API（请使用 HTTPS 或 localhost）')
+    return
+  }
+
+  saveRecordSettings()
+  showRecordSettings.value = false
+  const targetW = recordWidth.value
+  const targetH = recordHeight.value
+  const byteLimit = maxVideoBytes.value
+
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: {
+        displaySurface: 'monitor',
+        width: { ideal: targetW, max: targetW },
+        height: { ideal: targetH, max: targetH },
+        frameRate: { ideal: 24, max: 30 },
+      },
+      audio: true,
+    })
+
+    revokeVideoUrl()
+    recordedVideoBlob.value = null
+    recordedCoverDataUrl.value = ''
+    recordChunks = []
+    recordedBytes.value = 0
+    recordedSeconds.value = 0
+    recordStartAt = Date.now()
+
+    // 使用离屏 Canvas 将屏幕流严格缩放到用户设定的窗口大小 (targetW × targetH)，并抽取封面图
+    let recordTargetStream: MediaStream = stream
+    try {
+      const srcVideo = document.createElement('video')
+      srcVideo.srcObject = stream
+      srcVideo.muted = true
+      srcVideo.playsInline = true
+      await srcVideo.play()
+      activeSourceVideo = srcVideo
+
+      const scaleCanvas = document.createElement('canvas')
+      scaleCanvas.width = targetW
+      scaleCanvas.height = targetH
+      const scaleCtx = scaleCanvas.getContext('2d')
+
+      if (scaleCtx && typeof scaleCanvas.captureStream === 'function') {
+        const drawFrame = () => {
+          if (!srcVideo || srcVideo.paused || srcVideo.ended) return
+          scaleCtx.drawImage(srcVideo, 0, 0, targetW, targetH)
+          if (!recordedCoverDataUrl.value && srcVideo.videoWidth > 0) {
+            try {
+              recordedCoverDataUrl.value = scaleCanvas.toDataURL('image/png')
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+        drawFrame()
+        activeCanvasPump = window.setInterval(drawFrame, 40) // 25 fps
+        const canvasStream = scaleCanvas.captureStream(25)
+        stream.getAudioTracks().forEach((at) => canvasStream.addTrack(at))
+        activeCanvasStream = canvasStream
+        recordTargetStream = canvasStream
+      }
+    } catch {
+      recordTargetStream = stream
+    }
+
+    const { codecMime, containerMime } = pickBestRecorderMimeType(preferredFormat.value)
+    recordedMimeType.value = containerMime
+    const videoBps = computeTargetVideoBps(byteLimit)
+
+    const recorderOptions: MediaRecorderOptions = {
+      videoBitsPerSecond: videoBps,
+      audioBitsPerSecond: TARGET_AUDIO_BPS,
+    }
+    if (codecMime) {
+      recorderOptions.mimeType = codecMime
+    }
+
+    const recorder = new MediaRecorder(recordTargetStream, recorderOptions)
+
+    activeStream = stream
+    activeRecorder = recorder
+    recording.value = true
+
+    recorder.ondataavailable = (ev: BlobEvent) => {
+      if (!ev.data || ev.data.size === 0) return
+      const nextTotal = recordedBytes.value + ev.data.size
+      if (nextTotal >= byteLimit) {
+        const remain = byteLimit - recordedBytes.value
+        if (remain > 0) {
+          recordChunks.push(ev.data.slice(0, remain, containerMime))
+          recordedBytes.value = byteLimit
+        }
+        ElMessage.warning(
+          `录屏已达到设定的最大字节量 (${byteLimit.toLocaleString()} Bytes)，已自动停止录制`,
+        )
+        stopRecording()
+        return
+      }
+      recordChunks.push(ev.data)
+      recordedBytes.value = nextTotal
+    }
+
+    recorder.onstop = () => {
+      clearRecordTimer()
+      stopActiveStream()
+      recording.value = false
+      const finalDuration = Math.max(1, Math.round((Date.now() - recordStartAt) / 1000))
+      recordedSeconds.value = finalDuration
+
+      if (recordChunks.length === 0) return
+      const blob = new Blob(recordChunks, { type: containerMime })
+      recordedVideoBlob.value = blob
+      recordedBytes.value = blob.size
+      recordedVideoUrl.value = URL.createObjectURL(blob)
+
+      overlayMode.value = 'video'
+      loadSavedSettings()
+      fitCropRectToRecordSize()
+      active.value = true
+    }
+
+    stream.getVideoTracks()[0]?.addEventListener('ended', () => {
+      if (recording.value) stopRecording()
+    })
+
+    recordTimer = window.setInterval(() => {
+      recordedSeconds.value = Math.max(0, Math.floor((Date.now() - recordStartAt) / 1000))
+    }, 500)
+
+    recorder.start(500)
+    const maxMb = (byteLimit / (1024 * 1024)).toFixed(2)
+    ElMessage.success(
+      `已开始录屏（窗口 ${targetW}×${targetH} · 格式 ${containerMime.includes('mp4') ? 'MP4' : 'WebM'} · 上限 ${byteLimit.toLocaleString()}B/${maxMb}MB）`,
+    )
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'NotAllowedError') {
+      return
+    }
+    console.error('[startRecording]', err)
+    ElMessage.error(err instanceof Error ? err.message : '启动录屏失败')
+  }
+}
+
+function stopRecording() {
+  clearRecordTimer()
+  if (activeRecorder && activeRecorder.state !== 'inactive') {
+    try {
+      activeRecorder.stop()
+    } catch {
+      /* ignore */
+    }
+  } else {
+    stopActiveStream()
+    recording.value = false
+  }
+}
+
 function closeOverlay() {
   active.value = false
   capturedDataUrl.value = ''
+  revokeVideoUrl()
+  recordedVideoBlob.value = null
 }
 
 /** 拖拽移动选区 / 8方向缩放选区 / 空白处重画选区 */
@@ -336,10 +707,18 @@ function startPointerAction(
     cropRect.y = Math.round(nextY)
     cropRect.w = Math.round(nextW)
     cropRect.h = Math.round(nextH)
+
+    if (overlayMode.value === 'video') {
+      recordWidth.value = cropRect.w
+      recordHeight.value = cropRect.h
+    }
   }
 
   function onEnd() {
     clampCropRect()
+    if (overlayMode.value === 'video') {
+      saveRecordSettings()
+    }
     window.removeEventListener('mousemove', onMove)
     window.removeEventListener('mouseup', onEnd)
     window.removeEventListener('touchmove', onMove)
@@ -352,17 +731,34 @@ function startPointerAction(
   window.addEventListener('touchend', onEnd)
 }
 
-/** 计算裁剪后的真实像素尺寸显示 */
-const pixelDimensionLabel = computed(() => {
+function formatDuration(sec: number): string {
+  const m = Math.floor(sec / 60)
+  const s = sec % 60
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+
+const recordingStatusLabel = computed(() => {
+  const mb = (recordedBytes.value / (1024 * 1024)).toFixed(2)
+  const maxMb = (maxVideoBytes.value / (1024 * 1024)).toFixed(2)
+  return `${formatDuration(recordedSeconds.value)} · ${mb}/${maxMb}MB (${recordWidth.value}×${recordHeight.value})`
+})
+
+/** 计算裁剪后的真实像素尺寸显示 / 录屏元数据标签 */
+const boxHeaderLabel = computed(() => {
+  if (overlayMode.value === 'video') {
+    const mb = (recordedBytes.value / (1024 * 1024)).toFixed(2)
+    const fmt = recordedMimeType.value.includes('mp4') ? 'MP4' : 'WebM'
+    return `录屏预览 (${fmt}) · 窗口 ${recordWidth.value}×${recordHeight.value} px · 时长 ${formatDuration(recordedSeconds.value)} · ${recordedBytes.value.toLocaleString()} / ${maxVideoBytes.value.toLocaleString()} B (${mb} MB)`
+  }
   const scaleX = naturalSize.width > 0 && vw.value > 0 ? naturalSize.width / vw.value : 1
   const scaleY = naturalSize.height > 0 && vh.value > 0 ? naturalSize.height / vh.value : 1
   const pw = Math.round(cropRect.w * scaleX)
   const ph = Math.round(cropRect.h * scaleY)
-  return `${pw} × ${ph} px`
+  return `${pw} × ${ph} px · 拖动边框调整截图范围`
 })
 
 /**
- * 边缘操作栏定位：紧贴截图框边缘（优先贴合底边外侧；若触底则贴顶边外侧；若全屏则内贴底边）
+ * 边缘操作栏定位：紧贴截图框/预览框边缘（优先贴合底边外侧；若触底则贴顶边外侧；若全屏则内贴底边）
  */
 const edgeToolbarStyle = computed(() => {
   const toolbarH = 44
@@ -414,6 +810,16 @@ async function buildCroppedDataUrl(): Promise<string> {
 
 async function handleDownload() {
   try {
+    if (overlayMode.value === 'video') {
+      if (!recordedVideoUrl.value) throw new Error('无可用录屏文件')
+      const ext = recordedMimeType.value.includes('mp4') ? 'mp4' : 'webm'
+      const a = document.createElement('a')
+      a.href = recordedVideoUrl.value
+      a.download = `recording-${Date.now()}.${ext}`
+      a.click()
+      ElMessage.success('已下载录屏视频')
+      return
+    }
     const cropped = await buildCroppedDataUrl()
     const a = document.createElement('a')
     a.href = cropped
@@ -421,14 +827,56 @@ async function handleDownload() {
     a.click()
     ElMessage.success('已下载裁剪截图')
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '下载截图失败')
+    ElMessage.error(err instanceof Error ? err.message : '下载失败')
   }
+}
+
+function captureVideoCoverDataUrl(): string {
+  const v = videoPreviewRef.value
+  if (v && v.videoWidth > 0 && v.videoHeight > 0) {
+    try {
+      const c = document.createElement('canvas')
+      c.width = v.videoWidth
+      c.height = v.videoHeight
+      const ctx = c.getContext('2d')
+      if (ctx) {
+        ctx.drawImage(v, 0, 0, c.width, c.height)
+        return c.toDataURL('image/png')
+      }
+    } catch {
+      /* fallback below */
+    }
+  }
+  return recordedCoverDataUrl.value || buildFallbackCanvas().dataUrl
 }
 
 async function handleSendEmail() {
   if (!saveEmailSetting(true)) return
+  saveRecordSettings()
   sending.value = true
   try {
+    if (overlayMode.value === 'video') {
+      if (!recordedVideoBlob.value) throw new Error('无可用录屏数据')
+      const ext = recordedMimeType.value.includes('mp4') ? 'mp4' : 'webm'
+      const res = await sendScreenshotEmail({
+        to: email.value,
+        mediaBlob: recordedVideoBlob.value,
+        mediaFilename: `recording-${Date.now()}.${ext}`,
+        mediaMimeType: recordedMimeType.value,
+        coverImageDataUrl: captureVideoCoverDataUrl(),
+        durationSec: recordedSeconds.value,
+        windowWidth: recordWidth.value,
+        windowHeight: recordHeight.value,
+        maxBytes: maxVideoBytes.value,
+        pageUrl: props.pageUrl || window.location.href,
+        subject: mailSubject.value.trim(),
+        content: mailContent.value.trim(),
+      })
+      ElMessage.success(res.message || `录屏已发送至 ${email.value}`)
+      closeOverlay()
+      return
+    }
+
     const imageDataUrl = await buildCroppedDataUrl()
     const res = await sendScreenshotEmail({
       to: email.value,
@@ -454,27 +902,33 @@ function onWinResize() {
 }
 
 function onKeyDown(e: KeyboardEvent) {
-  if (e.key === 'Escape' && active.value) {
-    closeOverlay()
+  if (e.key === 'Escape') {
+    if (showRecordSettings.value) showRecordSettings.value = false
+    if (active.value) closeOverlay()
   }
 }
 
 onMounted(() => {
+  loadSavedSettings()
   window.addEventListener('resize', onWinResize)
   window.addEventListener('keydown', onKeyDown)
 })
 
 onUnmounted(() => {
+  clearRecordTimer()
+  stopActiveStream()
+  revokeVideoUrl()
   window.removeEventListener('resize', onWinResize)
   window.removeEventListener('keydown', onKeyDown)
 })
 </script>
 
 <template>
-  <!-- 左上角截图触发按钮（嵌入在左上角控制条中） -->
+  <!-- 左上角截图触发按钮 -->
   <el-button
     :icon="Camera"
     :loading="capturing"
+    :disabled="recording"
     size="small"
     circle
     class="!border-white/20 !bg-black/50 !text-white hover:!bg-black/70"
@@ -482,50 +936,231 @@ onUnmounted(() => {
     @click="triggerScreenshot"
   />
 
-  <!-- 全屏截图框选与边缘邮箱发送层 -->
+  <!-- 左上角录屏触发/停止与录屏参数设置 -->
+  <div v-if="!recording" class="relative flex items-center gap-1">
+    <el-button
+      :icon="VideoCamera"
+      size="small"
+      circle
+      class="!border-white/20 !bg-black/50 !text-white hover:!bg-black/70"
+      :title="`开始录屏 (${recordWidth}×${recordHeight} · ${preferredFormat.toUpperCase()} · 上限 ${maxVideoBytes.toLocaleString()} Bytes)`"
+      @click="startRecording"
+    />
+    <button
+      type="button"
+      class="flex h-6 items-center gap-1 rounded-full border border-white/20 bg-black/50 px-2 text-[11px] text-white/90 transition hover:bg-black/75"
+      title="设置录视频窗口大小、格式与最大字节量"
+      @click.stop="showRecordSettings = !showRecordSettings"
+    >
+      <span>{{ recordWidth }}×{{ recordHeight }}</span>
+      <span class="opacity-70">·</span>
+      <span>{{ (maxVideoBytes / (1024 * 1024)).toFixed(1) }}MB</span>
+      <el-icon class="text-[11px]"><Setting /></el-icon>
+    </button>
+
+    <!-- 录屏窗口大小、格式与最大字节量设置浮层 -->
+    <div
+      v-if="showRecordSettings"
+      class="absolute left-0 top-8 z-[5100] w-80 rounded-lg border border-white/20 bg-slate-900/95 p-3 text-xs text-white shadow-2xl backdrop-blur"
+      @mousedown.stop
+      @click.stop
+    >
+      <div class="mb-2 flex items-center justify-between border-b border-slate-700 pb-1.5 font-medium">
+        <span>录屏参数设置（窗口大小 / 格式 / 最大字节量）</span>
+        <button
+          type="button"
+          class="text-slate-400 hover:text-white"
+          @click="showRecordSettings = false"
+        >
+          ✕
+        </button>
+      </div>
+
+      <!-- 1. 录视频窗口大小设置 -->
+      <div class="mb-2.5">
+        <div class="mb-1 text-[11px] text-slate-300">录屏窗口大小（宽 × 高 px）：</div>
+        <div class="mb-1.5 flex flex-wrap gap-1">
+          <button
+            v-for="preset in WINDOW_PRESETS"
+            :key="preset.label"
+            type="button"
+            class="rounded border px-1.5 py-0.5 text-[11px] transition"
+            :class="
+              recordWidth === preset.w && recordHeight === preset.h
+                ? 'border-blue-400 bg-blue-600/40 text-white'
+                : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-slate-500'
+            "
+            @click="applyWindowPreset(preset.w, preset.h)"
+          >
+            {{ preset.w }}×{{ preset.h }}
+          </button>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <span class="text-[11px] text-slate-400">宽</span>
+          <input
+            v-model.number="recordWidth"
+            type="number"
+            min="160"
+            max="3840"
+            step="2"
+            class="h-6 w-20 rounded border border-slate-700 bg-slate-800 px-1.5 text-xs text-white focus:border-blue-400 focus:outline-none"
+            @change="saveRecordSettings"
+          />
+          <span class="text-slate-400">×</span>
+          <span class="text-[11px] text-slate-400">高</span>
+          <input
+            v-model.number="recordHeight"
+            type="number"
+            min="120"
+            max="2160"
+            step="2"
+            class="h-6 w-20 rounded border border-slate-700 bg-slate-800 px-1.5 text-xs text-white focus:border-blue-400 focus:outline-none"
+            @change="saveRecordSettings"
+          />
+          <span class="text-[11px] text-slate-400">px</span>
+        </div>
+      </div>
+
+      <!-- 2. 邮件收发兼容格式设置 -->
+      <div class="mb-2.5">
+        <div class="mb-1 text-[11px] text-slate-300">视频格式（要求邮件可发送接收）：</div>
+        <div class="flex gap-1.5">
+          <button
+            type="button"
+            class="flex-1 rounded border px-2 py-1 text-[11px] transition"
+            :class="
+              preferredFormat === 'mp4'
+                ? 'border-blue-400 bg-blue-600/40 text-white'
+                : 'border-slate-700 bg-slate-800 text-slate-300'
+            "
+            @click="
+              preferredFormat = 'mp4';
+              saveRecordSettings()
+            "
+          >
+            MP4 (video/mp4 · 推荐邮件直发)
+          </button>
+          <button
+            type="button"
+            class="rounded border px-2 py-1 text-[11px] transition"
+            :class="
+              preferredFormat === 'webm'
+                ? 'border-blue-400 bg-blue-600/40 text-white'
+                : 'border-slate-700 bg-slate-800 text-slate-300'
+            "
+            @click="
+              preferredFormat = 'webm';
+              saveRecordSettings()
+            "
+          >
+            WebM
+          </button>
+        </div>
+      </div>
+
+      <!-- 3. 最大字节量设置 -->
+      <div class="mb-2.5">
+        <div class="mb-1 text-[11px] text-slate-300">
+          最大字节量（达到上限自动停止，超限自动发 publicFileUrl）：
+        </div>
+        <div class="mb-1.5 flex flex-wrap gap-1">
+          <button
+            v-for="bp in MAX_BYTES_PRESETS"
+            :key="bp.bytes"
+            type="button"
+            class="rounded border px-1.5 py-0.5 text-[11px] transition"
+            :class="
+              maxVideoBytes === bp.bytes
+                ? 'border-blue-400 bg-blue-600/40 text-white'
+                : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-slate-500'
+            "
+            @click="applyMaxBytesPreset(bp.bytes)"
+          >
+            {{ bp.label }}
+          </button>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <input
+            v-model.number="maxVideoBytes"
+            type="number"
+            :min="MIN_VIDEO_BYTES"
+            :max="HARD_MAX_VIDEO_BYTES"
+            step="102400"
+            class="h-6 flex-1 rounded border border-slate-700 bg-slate-800 px-2 text-xs text-white focus:border-blue-400 focus:outline-none"
+            @change="saveRecordSettings"
+          />
+          <span class="text-[11px] text-slate-400">
+            Bytes (≈ {{ (maxVideoBytes / (1024 * 1024)).toFixed(2) }} MB)
+          </span>
+        </div>
+      </div>
+
+      <div class="flex justify-end gap-1.5 pt-1">
+        <el-button size="small" type="primary" :icon="VideoCamera" @click="startRecording">
+          立即开始录屏
+        </el-button>
+      </div>
+    </div>
+  </div>
+  <button
+    v-else
+    type="button"
+    class="flex h-6 items-center gap-1.5 rounded-full border border-red-400/60 bg-red-600/90 px-2.5 text-[11px] font-medium text-white shadow transition hover:bg-red-500"
+    title="点击停止录屏并打开邮件发送框"
+    @click="stopRecording"
+  >
+    <span class="h-2 w-2 animate-ping rounded-full bg-white" />
+    <el-icon><VideoPause /></el-icon>
+    <span>停止 ({{ recordingStatusLabel }})</span>
+  </button>
+
+  <!-- 全屏截图框选 / 录屏预览 与边缘邮箱发送层 -->
   <Teleport to="body">
     <div
       v-if="active"
-      class="fixed inset-0 z-[5000] select-none overflow-hidden bg-black"
-      @mousedown="(e) => startPointerAction(e, 'new')"
-      @touchstart="(e) => startPointerAction(e, 'new')"
+      class="fixed inset-0 z-[5000] select-none overflow-hidden bg-black/85"
+      @mousedown="(e) => overlayMode === 'image' && startPointerAction(e, 'new')"
+      @touchstart="(e) => overlayMode === 'image' && startPointerAction(e, 'new')"
     >
-      <!-- 捕获的全屏底图 -->
-      <img
-        :src="capturedDataUrl"
-        alt="captured-screen"
-        class="pointer-events-none block h-full w-full object-fill"
-      />
+      <!-- 截图模式：捕获的全屏底图与四周遮罩 -->
+      <template v-if="overlayMode === 'image'">
+        <img
+          :src="capturedDataUrl"
+          alt="captured-screen"
+          class="pointer-events-none block h-full w-full object-fill"
+        />
 
-      <!-- 选区四周半透明遮罩（保证选区内部清晰明亮） -->
-      <div
-        class="pointer-events-none absolute left-0 right-0 top-0 bg-black/55"
-        :style="{ height: `${cropRect.y}px` }"
-      />
-      <div
-        class="pointer-events-none absolute bottom-0 left-0 right-0 bg-black/55"
-        :style="{ top: `${cropRect.y + cropRect.h}px` }"
-      />
-      <div
-        class="pointer-events-none absolute left-0 bg-black/55"
-        :style="{
-          top: `${cropRect.y}px`,
-          width: `${cropRect.x}px`,
-          height: `${cropRect.h}px`,
-        }"
-      />
-      <div
-        class="pointer-events-none absolute right-0 bg-black/55"
-        :style="{
-          top: `${cropRect.y}px`,
-          left: `${cropRect.x + cropRect.w}px`,
-          height: `${cropRect.h}px`,
-        }"
-      />
+        <!-- 选区四周半透明遮罩（保证选区内部清晰明亮） -->
+        <div
+          class="pointer-events-none absolute left-0 right-0 top-0 bg-black/55"
+          :style="{ height: `${cropRect.y}px` }"
+        />
+        <div
+          class="pointer-events-none absolute bottom-0 left-0 right-0 bg-black/55"
+          :style="{ top: `${cropRect.y + cropRect.h}px` }"
+        />
+        <div
+          class="pointer-events-none absolute left-0 bg-black/55"
+          :style="{
+            top: `${cropRect.y}px`,
+            width: `${cropRect.x}px`,
+            height: `${cropRect.h}px`,
+          }"
+        />
+        <div
+          class="pointer-events-none absolute right-0 bg-black/55"
+          :style="{
+            top: `${cropRect.y}px`,
+            left: `${cropRect.x + cropRect.w}px`,
+            height: `${cropRect.h}px`,
+          }"
+        />
+      </template>
 
-      <!-- 可拖拽移动与缩放的截图框 -->
+      <!-- 可拖拽移动与缩放的截图框 / 录屏预览窗口 -->
       <div
         class="absolute cursor-move border-2 border-blue-400 shadow-[0_0_0_1px_rgba(0,0,0,0.4)]"
+        :class="overlayMode === 'video' ? 'bg-slate-950' : ''"
         :style="{
           left: `${cropRect.x}px`,
           top: `${cropRect.y}px`,
@@ -535,64 +1170,122 @@ onUnmounted(() => {
         @mousedown="(e) => startPointerAction(e, 'move')"
         @touchstart="(e) => startPointerAction(e, 'move')"
       >
-        <!-- 左上角像素尺寸与提示标签 -->
+        <!-- 录屏预览播放器 -->
+        <video
+          v-if="overlayMode === 'video' && recordedVideoUrl"
+          ref="videoPreviewRef"
+          :src="recordedVideoUrl"
+          controls
+          autoplay
+          loop
+          playsinline
+          class="h-full w-full object-contain"
+          @mousedown.stop
+          @touchstart.stop
+        />
+
+        <!-- 左上角像素尺寸 / 录屏信息标签 -->
         <div
-          class="pointer-events-none absolute left-1.5 top-1.5 rounded bg-black/70 px-2 py-0.5 text-[11px] leading-4 text-white"
+          class="pointer-events-none absolute left-1.5 top-1.5 z-10 rounded bg-black/75 px-2 py-0.5 text-[11px] leading-4 text-white"
         >
-          {{ pixelDimensionLabel }} · 拖动边框调整截图范围
+          {{ boxHeaderLabel }}
         </div>
 
         <!-- 八方向缩放控制点 -->
         <span
-          class=" absolute -left-1.5 -top-1.5 h-3 w-3 cursor-nwse-resize border border-white bg-blue-500"
+          class="absolute -left-1.5 -top-1.5 z-10 h-3 w-3 cursor-nwse-resize border border-white bg-blue-500"
           @mousedown="(e) => startPointerAction(e, 'nw')"
           @touchstart="(e) => startPointerAction(e, 'nw')"
         />
         <span
-          class="absolute -top-1.5 left-1/2 h-3 w-3 -translate-x-1/2 cursor-ns-resize border border-white bg-blue-500"
+          class="absolute -top-1.5 left-1/2 z-10 h-3 w-3 -translate-x-1/2 cursor-ns-resize border border-white bg-blue-500"
           @mousedown="(e) => startPointerAction(e, 'n')"
           @touchstart="(e) => startPointerAction(e, 'n')"
         />
         <span
-          class="absolute -right-1.5 -top-1.5 h-3 w-3 cursor-nesw-resize border border-white bg-blue-500"
+          class="absolute -right-1.5 -top-1.5 z-10 h-3 w-3 cursor-nesw-resize border border-white bg-blue-500"
           @mousedown="(e) => startPointerAction(e, 'ne')"
           @touchstart="(e) => startPointerAction(e, 'ne')"
         />
         <span
-          class="absolute -right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 cursor-ew-resize border border-white bg-blue-500"
+          class="absolute -right-1.5 top-1/2 z-10 h-3 w-3 -translate-y-1/2 cursor-ew-resize border border-white bg-blue-500"
           @mousedown="(e) => startPointerAction(e, 'e')"
           @touchstart="(e) => startPointerAction(e, 'e')"
         />
         <span
-          class="absolute -bottom-1.5 -right-1.5 h-3 w-3 cursor-nwse-resize border border-white bg-blue-500"
+          class="absolute -bottom-1.5 -right-1.5 z-10 h-3 w-3 cursor-nwse-resize border border-white bg-blue-500"
           @mousedown="(e) => startPointerAction(e, 'se')"
           @touchstart="(e) => startPointerAction(e, 'se')"
         />
         <span
-          class="absolute -bottom-1.5 left-1/2 h-3 w-3 -translate-x-1/2 cursor-ns-resize border border-white bg-blue-500"
+          class="absolute -bottom-1.5 left-1/2 z-10 h-3 w-3 -translate-x-1/2 cursor-ns-resize border border-white bg-blue-500"
           @mousedown="(e) => startPointerAction(e, 's')"
           @touchstart="(e) => startPointerAction(e, 's')"
         />
         <span
-          class="absolute -bottom-1.5 -left-1.5 h-3 w-3 cursor-nesw-resize border border-white bg-blue-500"
+          class="absolute -bottom-1.5 -left-1.5 z-10 h-3 w-3 cursor-nesw-resize border border-white bg-blue-500"
           @mousedown="(e) => startPointerAction(e, 'sw')"
           @touchstart="(e) => startPointerAction(e, 'sw')"
         />
         <span
-          class="absolute -left-1.5 top-1/2 h-3 w-3 -translate-y-1/2 cursor-ew-resize border border-white bg-blue-500"
+          class="absolute -left-1.5 top-1/2 z-10 h-3 w-3 -translate-y-1/2 cursor-ew-resize border border-white bg-blue-500"
           @mousedown="(e) => startPointerAction(e, 'w')"
           @touchstart="(e) => startPointerAction(e, 'w')"
         />
       </div>
 
-      <!-- 截图框边缘工具栏（邮箱设置与发送均在截图框边缘） -->
+      <!-- 框体边缘工具栏（邮箱设置、窗口大小/最大字节量、标题/内容输入与发送均在边缘） -->
       <div
-        class="absolute z-10 flex max-w-[calc(100vw-16px)] flex-wrap items-center gap-1.5 rounded-lg border border-white/20 bg-slate-900/95 px-2.5 py-1.5 text-xs text-white shadow-xl backdrop-blur"
+        class="absolute z-20 flex max-w-[calc(100vw-16px)] flex-wrap items-center gap-1.5 rounded-lg border border-white/20 bg-slate-900/95 px-2.5 py-1.5 text-xs text-white shadow-xl backdrop-blur"
         :style="edgeToolbarStyle"
         @mousedown.stop
         @touchstart.stop
       >
-        <!-- 邮箱设置区（位于截图框边缘） -->
+        <!-- 录屏模式边缘快速调节：窗口大小 & 最大字节量 -->
+        <template v-if="overlayMode === 'video'">
+          <div class="flex items-center gap-1 rounded border border-slate-700 bg-slate-800/90 px-1.5 py-0.5 text-[11px]">
+            <span class="text-slate-400">窗口</span>
+            <input
+              v-model.number="recordWidth"
+              type="number"
+              min="160"
+              max="3840"
+              class="h-5 w-14 rounded bg-slate-900 px-1 text-center text-[11px] text-white focus:outline-none"
+              title="录屏窗口宽度 (px)"
+              @change="
+                saveRecordSettings();
+                fitCropRectToRecordSize()
+              "
+            />
+            <span class="text-slate-500">×</span>
+            <input
+              v-model.number="recordHeight"
+              type="number"
+              min="120"
+              max="2160"
+              class="h-5 w-14 rounded bg-slate-900 px-1 text-center text-[11px] text-white focus:outline-none"
+              title="录屏窗口高度 (px)"
+              @change="
+                saveRecordSettings();
+                fitCropRectToRecordSize()
+              "
+            />
+            <span class="text-slate-400">上限</span>
+            <input
+              v-model.number="maxVideoBytes"
+              type="number"
+              :min="MIN_VIDEO_BYTES"
+              :max="HARD_MAX_VIDEO_BYTES"
+              step="102400"
+              class="h-5 w-24 rounded bg-slate-900 px-1 text-center text-[11px] text-white focus:outline-none"
+              title="最大字节量 (Bytes)"
+              @change="saveRecordSettings"
+            />
+            <span class="text-slate-400">B</span>
+          </div>
+        </template>
+
+        <!-- 邮箱设置区（位于框体边缘） -->
         <template v-if="editingEmail">
           <input
             ref="emailInputRef"
@@ -641,13 +1334,17 @@ onUnmounted(() => {
           @keydown.enter.prevent="handleSendEmail"
         />
 
-        <!-- 发送到邮箱按钮（位于截图框边缘） -->
+        <!-- 发送到邮箱按钮（位于框体边缘） -->
         <el-button
           size="small"
           type="primary"
           :icon="Message"
           :loading="sending"
-          title="将选区截图发送到指定邮箱"
+          :title="
+            overlayMode === 'video'
+              ? '优先发送视频附件，若视频无法直发则自动发送 publicFileUrl 到邮箱'
+              : '将选区截图发送到指定邮箱'
+          "
           @click="handleSendEmail"
         >
           发送邮件
@@ -656,6 +1353,7 @@ onUnmounted(() => {
         <div class="mx-0.5 h-4 w-px bg-slate-700" />
 
         <el-button
+          v-if="overlayMode === 'image'"
           size="small"
           :icon="FullScreen"
           class="!border-slate-700 !bg-slate-800 !text-slate-200 hover:!text-white"
@@ -669,7 +1367,7 @@ onUnmounted(() => {
           size="small"
           :icon="Download"
           class="!border-slate-700 !bg-slate-800 !text-slate-200 hover:!text-white"
-          title="下载选区截图到本地"
+          :title="overlayMode === 'video' ? '下载录屏视频到本地' : '下载选区截图到本地'"
           @click="handleDownload"
         />
 
@@ -677,11 +1375,10 @@ onUnmounted(() => {
           size="small"
           :icon="Close"
           class="!border-slate-700 !bg-slate-800 !text-slate-200 hover:!text-white"
-          title="关闭截图 (Esc)"
+          title="关闭 (Esc)"
           @click="closeOverlay"
         />
       </div>
     </div>
   </Teleport>
 </template>
-

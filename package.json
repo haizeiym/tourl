@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n server,web -c blue,green \"npm run server\" \"vite\"",
-    "server": "node server/config-server.mjs",
+    "server": "node --watch server/config-server.mjs",
     "build": "node scripts/ensure-cloud-url.mjs && vue-tsc -b && vite build",
     "preview": "npm run build && SERVE_STATIC=1 node server/config-server.mjs",
     "start": "SERVE_STATIC=1 node server/config-server.mjs",

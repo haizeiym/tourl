@@ -3,3 +3,11 @@ RewriteEngine On
 # /api/config -> config.php（Apache）
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteRule ^api/config$ api/config.php [QSA,L]
+
+# /api/screenshot/email -> screenshot.php
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^(?:api/)?screenshot/email$ screenshot.php [QSA,L]
+
+# /api/screenshot/file/<name> -> data/screenshots/<name>
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^(?:api/)?screenshot/file/([a-zA-Z0-9._-]+)$ data/screenshots/$1 [QSA,L]

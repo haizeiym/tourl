@@ -5,6 +5,10 @@ import 'element-plus/dist/index.css'
 import './style.css'
 import App from './App.vue'
 
-const app = createApp(App)
-app.use(ElementPlus, { locale: zhCn })
-app.mount('#app')
+if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('mail_ok') === '1') {
+  document.body.textContent = 'MAIL_OK'
+} else {
+  const app = createApp(App)
+  app.use(ElementPlus, { locale: zhCn })
+  app.mount('#app')
+}

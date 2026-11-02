@@ -1,7 +1,25 @@
 import http from 'node:http'
 import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+function getLanIp() {
+  try {
+    const nets = os.networkInterfaces()
+    for (const list of Object.values(nets)) {
+      if (!list) continue
+      for (const net of list) {
+        if (net.family === 'IPv4' && !net.internal && net.address) {
+          return net.address
+        }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return '127.0.0.1'
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..')
@@ -254,37 +272,173 @@ const server = http.createServer(async (req, res) => {
       return
     }
 
+    const fileMatch = url.pathname.match(/^\/(?:api\/)?screenshot\/file\/([a-zA-Z0-9._-]+)$/)
+    if (fileMatch && method === 'GET') {
+      const filename = fileMatch[1]
+      const filePath = path.join(SCREENSHOT_DIR, filename)
+      try {
+        const data = await fs.readFile(filePath)
+        const ext = path.extname(filename).toLowerCase()
+        const mime =
+          ext === '.webm'
+            ? 'video/webm'
+            : ext === '.mp4'
+              ? 'video/mp4'
+              : 'image/png'
+        res.writeHead(200, {
+          'Content-Type': mime,
+          'Content-Length': data.byteLength,
+          'Access-Control-Allow-Origin': '*',
+        })
+        res.end(data)
+      } catch {
+        sendJson(res, 404, { error: '文件不存在' })
+      }
+      return
+    }
+
     if ((url.pathname === '/api/screenshot/email' || url.pathname === '/screenshot/email') && method === 'POST') {
       const body = await readBody(req)
       const to = (typeof body?.to === 'string' ? body.to.trim() : '') || 'gcdxdy666@gmail.com'
       const imageDataUrl = typeof body?.imageDataUrl === 'string' ? body.imageDataUrl : ''
       const pageUrl = typeof body?.pageUrl === 'string' ? body.pageUrl : ''
       const content = typeof body?.content === 'string' ? body.content.trim() : ''
+      const b64Marker = ';base64,'
+      const b64Idx = imageDataUrl.indexOf(b64Marker)
+      const header = b64Idx > 0 ? imageDataUrl.slice(0, b64Idx) : ''
+      if (b64Idx === -1 || (!header.startsWith('data:image/') && !header.startsWith('data:video/'))) {
+        sendJson(res, 400, { error: '媒体数据格式无效（需为图片或视频 base64）' })
+        return
+      }
+      const mimeType = header.slice(5).split(';')[0] || 'image/png'
+      const isVideo = mimeType.startsWith('video/')
       const subject =
         typeof body?.subject === 'string' && body.subject.trim()
           ? body.subject.trim()
-          : `网页截图 (${new Date().toISOString().slice(0, 19).replace('T', ' ')})`
+          : `${isVideo ? '网页录屏' : '网页截图'} (${new Date().toISOString().slice(0, 19).replace('T', ' ')})`
 
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
         sendJson(res, 400, { error: '请填写有效的收件邮箱地址' })
         return
       }
-      const match = imageDataUrl.match(/^data:image\/png;base64,(.+)$/)
-      if (!match?.[1]) {
-        sendJson(res, 400, { error: '截图数据格式无效（需为 PNG base64）' })
+      const base64Content = imageDataUrl.slice(b64Idx + b64Marker.length)
+      if (!base64Content) {
+        sendJson(res, 400, { error: '媒体数据为空' })
         return
       }
-      const base64Content = match[1]
+      const buf = Buffer.from(base64Content, 'base64')
+      if (buf.byteLength > 30 * 1024 * 1024) {
+        sendJson(res, 400, { error: '媒体文件大小超过 30MB 上限' })
+        return
+      }
 
       await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
       const stamp = Date.now()
-      const pngPath = path.join(SCREENSHOT_DIR, `screenshot-${stamp}.png`)
-      const metaPath = path.join(SCREENSHOT_DIR, `screenshot-${stamp}.json`)
-      await fs.writeFile(pngPath, Buffer.from(base64Content, 'base64'))
+      const ext = isVideo ? (mimeType.includes('mp4') ? 'mp4' : 'webm') : 'png'
+      const prefix = isVideo ? 'recording' : 'screenshot'
+      const mediaFilename = `${prefix}-${stamp}.${ext}`
+      const pngPath = path.join(SCREENSHOT_DIR, mediaFilename)
+      const metaPath = path.join(SCREENSHOT_DIR, `${prefix}-${stamp}.json`)
+      await fs.writeFile(pngPath, buf)
+
+      const lanIp = getLanIp()
+      const localFileUrl = `http://${lanIp}:${PORT}/api/screenshot/file/${mediaFilename}`
+      let publicFileUrl = ''
+      const uaHeaders = {
+        'User-Agent':
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+      }
+
+      if (isVideo) {
+        const videoBlob = new Blob([buf], { type: mimeType })
+        // 1. 尝试 tmpfiles.org
+        try {
+          const fd = new FormData()
+          fd.append('file', videoBlob, mediaFilename)
+          const upRes = await fetch('https://tmpfiles.org/api/v1/upload', {
+            method: 'POST',
+            headers: uaHeaders,
+            body: fd,
+            signal: AbortSignal.timeout(8000),
+          })
+          if (upRes.ok) {
+            const j = await upRes.json()
+            const rawUrl = typeof j?.data?.url === 'string' ? j.data.url : ''
+            if (rawUrl) {
+              publicFileUrl = rawUrl.replace('://tmpfiles.org/', '://tmpfiles.org/dl/')
+            }
+          }
+        } catch (err) {
+          console.warn('[screenshot-email] tmpfiles upload skipped', err instanceof Error ? err.message : err)
+        }
+        // 2. 备选 uguu.se
+        if (!publicFileUrl) {
+          try {
+            const fd = new FormData()
+            fd.append('files[]', videoBlob, mediaFilename)
+            const upRes = await fetch('https://uguu.se/upload', {
+              method: 'POST',
+              headers: uaHeaders,
+              body: fd,
+              signal: AbortSignal.timeout(8000),
+            })
+            if (upRes.ok) {
+              const j = await upRes.json()
+              const uUrl = j?.files?.[0]?.url
+              if (typeof uUrl === 'string' && /^https?:\/\//i.test(uUrl)) {
+                publicFileUrl = uUrl
+              }
+            }
+          } catch (err) {
+            console.warn('[screenshot-email] uguu upload skipped', err instanceof Error ? err.message : err)
+          }
+        }
+        // 3. 备选 litterbox.catbox.moe
+        if (!publicFileUrl) {
+          try {
+            const fd = new FormData()
+            fd.append('reqtype', 'fileupload')
+            fd.append('time', '72h')
+            fd.append('fileToUpload', videoBlob, mediaFilename)
+            const upRes = await fetch('https://litterbox.catbox.moe/resources/internals/api.php', {
+              method: 'POST',
+              headers: uaHeaders,
+              body: fd,
+              signal: AbortSignal.timeout(8000),
+            })
+            if (upRes.ok) {
+              const text = (await upRes.text()).trim()
+              if (/^https?:\/\//i.test(text)) publicFileUrl = text
+            }
+          } catch (err) {
+            console.warn('[screenshot-email] litterbox upload skipped', err instanceof Error ? err.message : err)
+          }
+        }
+      }
+
+      if (!publicFileUrl) {
+        publicFileUrl = localFileUrl
+      }
+
       await fs.writeFile(
         metaPath,
         JSON.stringify(
-          { to, subject, content, pageUrl, sentAt: stamp, pngFile: path.basename(pngPath) },
+          {
+            to,
+            subject,
+            content,
+            pageUrl,
+            mimeType,
+            sizeBytes: buf.byteLength,
+            maxBytes: body?.maxBytes,
+            windowWidth: body?.windowWidth,
+            windowHeight: body?.windowHeight,
+            durationSec: body?.durationSec,
+            publicFileUrl,
+            localFileUrl,
+            sentAt: stamp,
+            file: mediaFilename,
+          },
           null,
           2,
         ),
@@ -292,36 +446,64 @@ const server = http.createServer(async (req, res) => {
       )
 
       const contentHtml = content ? `<p>邮件内容：${content}</p>` : ''
+      const urlHtml = `<p>视频在线播放/下载链接 (publicFileUrl)：<a href="${publicFileUrl}">${publicFileUrl}</a></p>`
       const resendKey = process.env.RESEND_API_KEY
       const webhookUrl = process.env.EMAIL_WEBHOOK_URL
       if (resendKey) {
         const mailFrom = process.env.MAIL_FROM || 'Jumpl Screenshot <onboarding@resend.dev>'
-        const resp = await fetch('https://api.resend.com/emails', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${resendKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            from: mailFrom,
-            to: [to],
-            subject,
-            html: `${contentHtml}<p>页面地址：${pageUrl || '未知'}</p><p>截图见附件。</p>`,
-            attachments: [{ filename: `screenshot-${stamp}.png`, content: base64Content }],
-          }),
-        })
+        const canAttach = buf.byteLength <= 4_500_000
+        let resp = null
+        if (canAttach) {
+          resp = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${resendKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              from: mailFrom,
+              to: [to],
+              subject,
+              html: `${contentHtml}<p>页面地址：${pageUrl || '未知'}</p>${isVideo ? urlHtml : ''}<p>${isVideo ? '录屏视频' : '截图'}见附件。</p>`,
+              attachments: [{ filename: mediaFilename, content: base64Content }],
+            }),
+          }).catch(() => null)
+        }
+        // 如果视频发送不了，则发送 publicFileUrl 到邮箱
+        if (!resp || !resp.ok) {
+          resp = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${resendKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              from: mailFrom,
+              to: [to],
+              subject,
+              html: `${contentHtml}<p>页面地址：${pageUrl || '未知'}</p>${urlHtml}`,
+            }),
+          })
+        }
         if (!resp.ok) {
           const errText = await resp.text().catch(() => '')
           sendJson(res, 502, { error: `邮件服务返回错误 (${resp.status}) ${errText.slice(0, 120)}` })
           return
         }
-        console.log(`[screenshot-email] sent via Resend to=${to}`)
-        sendJson(res, 200, { ok: true, mode: 'resend', message: `截图已发送至 ${to}` })
+        console.log(`[screenshot-email] sent via Resend to=${to} publicUrl=${publicFileUrl}`)
+        sendJson(res, 200, {
+          ok: true,
+          mode: 'resend',
+          publicFileUrl,
+          fileUrl: publicFileUrl,
+          localFileUrl,
+          message: `${isVideo ? '录屏' : '截图'}已发送至 ${to}`,
+        })
         return
       }
 
       if (webhookUrl) {
-        const resp = await fetch(webhookUrl, {
+        let resp = await fetch(webhookUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -329,24 +511,49 @@ const server = http.createServer(async (req, res) => {
             subject,
             content,
             pageUrl,
+            publicFileUrl,
             imageDataUrl,
-            filename: `screenshot-${stamp}.png`,
+            filename: mediaFilename,
           }),
-        })
+        }).catch(() => null)
+        if (!resp || !resp.ok) {
+          resp = await fetch(webhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              to,
+              subject,
+              content,
+              pageUrl,
+              publicFileUrl,
+              filename: mediaFilename,
+            }),
+          })
+        }
         if (!resp.ok) {
           sendJson(res, 502, { error: `邮件 Webhook 返回错误 (${resp.status})` })
           return
         }
-        console.log(`[screenshot-email] sent via webhook to=${to}`)
-        sendJson(res, 200, { ok: true, mode: 'webhook', message: `截图已发送至 ${to}` })
+        console.log(`[screenshot-email] sent via webhook to=${to} publicUrl=${publicFileUrl}`)
+        sendJson(res, 200, {
+          ok: true,
+          mode: 'webhook',
+          publicFileUrl,
+          fileUrl: publicFileUrl,
+          localFileUrl,
+          message: `${isVideo ? '录屏' : '截图'}已发送至 ${to}`,
+        })
         return
       }
 
-      console.log(`[screenshot-email] saved locally to=${to} file=${pngPath}`)
+      console.log(`[screenshot-email] saved locally to=${to} file=${pngPath} publicUrl=${publicFileUrl}`)
       sendJson(res, 200, {
         ok: true,
         mode: 'local',
-        message: `已投递截图至 ${to}（本地开发已保存至 data/screenshots/${path.basename(pngPath)}）`,
+        publicFileUrl,
+        fileUrl: publicFileUrl,
+        localFileUrl,
+        message: `已投递${isVideo ? '录屏' : '截图'}至 ${to}（本地开发已保存至 data/screenshots/${mediaFilename}）`,
       })
       return
     }

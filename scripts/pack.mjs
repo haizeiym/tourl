@@ -178,6 +178,13 @@ if (profile) {
     console.error(err instanceof Error ? err.message : err)
     process.exit(1)
   }
+} else {
+  try {
+    console.log('[pack] 正在同步部署 config-api Worker...')
+    execSync('npx wrangler deploy', { cwd: configApi, stdio: 'inherit' })
+  } catch {
+    console.warn('[pack] Worker 自动部署跳过（如需更新云端 Worker 请在 config-api 目录执行 npx wrangler deploy）')
+  }
 }
 
 const buildEnv = { ...process.env }
