@@ -574,7 +574,7 @@ public/data/jump-config.json
 
 1. **全场景左上角截图与录屏入口**：
    - 无论通过「当前页 (`iframe`)」还是「新标签页 (`tab`)」打开目标网页，左上角悬浮控制条均提供「截图」、「录屏」及「录屏参数设置（窗口大小 / 最大字节量 / 格式）」入口
-   - 「新标签页」打开时通过本站包装路由（`?preview=<encodedUrl>`）内嵌全屏 `IframePreview` 打开，使新标签页与当前页具备一致的左上角控制条（返回/关闭、横竖屏切换、截图、录屏）
+   - 「新标签页」打开时通过本站包装路由（`?preview=<encodedUrl>`）内嵌全屏 `IframePreview` 打开，使新标签页与当前页具备一致的左上角控制条（返回/关闭、横竖屏切换、截图、录屏），同时 `<iframe allow>` 显式授权 `clipboard-read; clipboard-write` 等权限以支持游戏内复制粘贴
 2. **全屏与控制台截图采集**：
    - 点击「截图」调用浏览器原生屏幕捕获 API `navigator.mediaDevices.getDisplayMedia`（支持截取整个屏幕/窗口，包含 F12 开发者工具控制台及跨域游戏 Canvas 画面），单帧抓取为高清底图后立即停止共享流并进入框选裁剪层
    - 非安全上下文或不支持 `getDisplayMedia` 时提供 Canvas 合成兜底提示

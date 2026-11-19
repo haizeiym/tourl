@@ -312,7 +312,7 @@ onUnmounted(() => {
         :src="src"
         class="block h-full w-full border-0 bg-black"
         title="jump-preview"
-        allow="autoplay; fullscreen; screen-orientation; clipboard-write; gyroscope; accelerometer"
+        allow="autoplay; fullscreen; screen-orientation; clipboard-read; clipboard-write; gyroscope; accelerometer; gamepad; microphone; camera; web-share"
         allowfullscreen
         @load="onIframeLoad"
       />
