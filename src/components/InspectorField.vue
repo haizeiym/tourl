@@ -27,6 +27,11 @@ const isMultiTab = computed(() => isLobby.value && item.value?.openMode === 'mul
 const multiTabCount = computed(() => clampMultiTabCount(lobby.value?.multiTabCount))
 const jumping = computed(() => props.store.jumping.value)
 
+const itemName = computed(() => item.value?.name ?? '')
+const itemOpenMode = computed<OpenMode>(() => item.value?.openMode ?? 'tab')
+const itemIconUrl = computed(() => item.value?.iconUrl ?? '')
+const itemUrl = computed(() => item.value?.url ?? '')
+
 /** 每个字段一个布尔值，模板中不再依赖 v-for 局部变量 */
 const show = computed(() => {
   const id = props.fieldId
@@ -90,8 +95,8 @@ function removeArgRow(index: number) {
   commitArgs()
 }
 
-function onNameInput(val: string) {
-  props.store.updateSelected({ name: val })
+function onNameInput(val: string | number | null | undefined) {
+  props.store.updateSelected({ name: String(val ?? '') })
 }
 
 function onOpenMode(val: OpenMode | string | number | boolean | undefined) {
@@ -108,12 +113,12 @@ function onMultiTabCount(val: number) {
   patchLobby({ multiTabCount: clampMultiTabCount(val) })
 }
 
-function onIconUrl(val: string) {
-  props.store.updateSelected({ iconUrl: val })
+function onIconUrl(val: string | number | null | undefined) {
+  props.store.updateSelected({ iconUrl: String(val ?? '') })
 }
 
-function onUrl(val: string) {
-  props.store.updateSelected({ url: val })
+function onUrl(val: string | number | null | undefined) {
+  props.store.updateSelected({ url: String(val ?? '') })
 }
 
 type LobbyTextKey = 'server' | 'appKey' | 'path' | 'uuid' | 'nickname' | 'session' | 'game_redirect'
@@ -191,20 +196,20 @@ async function onDelete() {
 
 <template>
   <div>
-    <div v-if="show.name && item">
+    <div v-if="show.name">
       <label class="mb-1 block text-xs text-slate-500">名称</label>
       <el-input
         ref="nameInput"
-        :model-value="item.name"
+        :model-value="itemName"
         maxlength="64"
         @update:model-value="onNameInput"
       />
     </div>
 
-    <div v-if="show.openMode && item" class="space-y-2.5">
+    <div v-if="show.openMode" class="space-y-2.5">
       <div>
         <label class="mb-1 block text-xs text-slate-500">打开方式</label>
-        <el-radio-group :model-value="item.openMode" @update:model-value="onOpenMode">
+        <el-radio-group :model-value="itemOpenMode" @update:model-value="onOpenMode">
           <el-radio-button value="tab">新标签页</el-radio-button>
           <el-radio-button value="iframe">当前页</el-radio-button>
           <el-radio-button v-if="isLobby" value="multi-tab">多标签打开</el-radio-button>
@@ -217,19 +222,19 @@ async function onDelete() {
       />
     </div>
 
-    <div v-if="show.iconUrl && item">
+    <div v-if="show.iconUrl">
       <label class="mb-1 block text-xs text-slate-500">图标 URL</label>
       <el-input
-        :model-value="item.iconUrl"
+        :model-value="itemIconUrl"
         placeholder="https://..."
         @update:model-value="onIconUrl"
       />
     </div>
 
-    <div v-if="show.url && item">
+    <div v-if="show.url">
       <label class="mb-1 block text-xs text-slate-500">跳转地址</label>
       <el-input
-        :model-value="item.url"
+        :model-value="itemUrl"
         placeholder="https://..."
         @update:model-value="onUrl"
       />
