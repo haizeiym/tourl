@@ -1,8 +1,14 @@
 /** 打开方式 */
-export type OpenMode = 'tab' | 'iframe'
+export type OpenMode = 'tab' | 'iframe' | 'multi-tab'
 
 /** 跳转项类型：normal=普通 URL；lobby=大厅登录跳转（参数存独立 KV） */
 export type JumpKind = 'normal' | 'lobby'
+
+/** 多标签模式下的单条用户账号身份 */
+export interface LobbyUserAccount {
+  uuid: string
+  nickname: string
+}
 
 /** 大厅特殊项参数（对齐 deploy_lobby 配置面板） */
 export interface LobbyConfig {
@@ -13,6 +19,10 @@ export interface LobbyConfig {
   path: string
   uuid: string
   nickname: string
+  /** 多标签打开时的标签数量（2 ~ 12，默认 2） */
+  multiTabCount?: number
+  /** 多标签打开时的多账号列表（仅持久化于本机 localStorage，每个账号 uuid 与 nickname 均不重复） */
+  accounts?: LobbyUserAccount[]
   session: string
   channel_id: number
   merchant_id: number

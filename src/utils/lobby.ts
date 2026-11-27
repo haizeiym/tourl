@@ -1,5 +1,5 @@
 import CryptoJS from 'crypto-js'
-import type { JumpKind, LobbyConfig, OpenMode } from '../types/jump'
+import type { JumpKind, LobbyConfig, LobbyUserAccount, OpenMode } from '../types/jump'
 import { createId } from './jump'
 
 const NICKNAMES = [
@@ -17,6 +17,16 @@ const NICKNAMES = [
   '福星高照',
 ]
 
+export const MIN_MULTI_TAB_COUNT = 2
+export const MAX_MULTI_TAB_COUNT = 12
+export const DEFAULT_MULTI_TAB_COUNT = 2
+
+export function clampMultiTabCount(val: unknown): number {
+  const num = typeof val === 'number' ? val : Number(val)
+  if (!Number.isFinite(num)) return DEFAULT_MULTI_TAB_COUNT
+  return Math.min(MAX_MULTI_TAB_COUNT, Math.max(MIN_MULTI_TAB_COUNT, Math.round(num)))
+}
+
 export function isLobbyKind(kind: unknown): kind is JumpKind {
   return kind === 'lobby'
 }
@@ -31,15 +41,34 @@ export function randomString(min = 8, max = 12): string {
   return result
 }
 
-export function generateLobbyUuid(): string {
-  return randomString(9, 9)
+export function generateLobbyUuid(exclude?: ReadonlySet<string>): string {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const candidate = randomString(9, 9)
+    if (!exclude || !exclude.has(candidate)) {
+      return candidate
+    }
+  }
+  return `${randomString(6, 6)}${Date.now().toString(36).slice(-3)}`
 }
 
-export function generateLobbyNickname(): string {
-  return NICKNAMES[Math.floor(Math.random() * NICKNAMES.length)]!
+export function generateLobbyNickname(exclude?: ReadonlySet<string>): string {
+  const available = NICKNAMES.filter((n) => !exclude || !exclude.has(n))
+  if (available.length > 0) {
+    return available[Math.floor(Math.random() * available.length)]!
+  }
+  for (let suffix = 2; suffix < 200; suffix += 1) {
+    for (const base of NICKNAMES) {
+      const candidate = `${base}${suffix}`
+      if (!exclude || !exclude.has(candidate)) {
+        return candidate
+      }
+    }
+  }
+  return `${NICKNAMES[0]!}${randomString(3, 3)}`
 }
 
 const LS_USER_KEY = 'jumpl.lobbyUser'
+const LS_MULTI_USERS_KEY = 'jumpl.lobbyUsers'
 
 export type LocalLobbyUser = {
   uuid: string
@@ -95,14 +124,139 @@ export function ensureLocalLobbyUser(): LocalLobbyUser {
   return next
 }
 
+function readRawLocalUsers(): LobbyUserAccount[] {
+  try {
+    const raw = localStorage.getItem(LS_MULTI_USERS_KEY)
+    if (!raw) return []
+    const arr = JSON.parse(raw) as unknown
+    if (!Array.isArray(arr)) return []
+    return arr
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null
+        const rec = item as Record<string, unknown>
+        return {
+          uuid: nonempty(rec.uuid),
+          nickname: nonempty(rec.nickname),
+        }
+      })
+      .filter((item): item is LobbyUserAccount => item !== null)
+  } catch {
+    return []
+  }
+}
+
+export function writeRawLocalUsers(accounts: LobbyUserAccount[]): void {
+  try {
+    localStorage.setItem(LS_MULTI_USERS_KEY, JSON.stringify(accounts))
+  } catch (err) {
+    console.warn('[writeRawLocalUsers] 写入失败', err)
+  }
+}
+
+/**
+ * 保证前 count 个账号均具备非空且互不重复的 uuid 与 nickname
+ */
+export function deduplicateLobbyAccounts(
+  source: LobbyUserAccount[],
+  count: number,
+): LobbyUserAccount[] {
+  const targetLen = Math.max(count, source.length, DEFAULT_MULTI_TAB_COUNT)
+  const usedUuids = new Set<string>()
+  const usedNicknames = new Set<string>()
+  const result: LobbyUserAccount[] = []
+
+  for (let i = 0; i < targetLen; i += 1) {
+    const rawUuid = nonempty(source[i]?.uuid)
+    const rawNick = nonempty(source[i]?.nickname)
+
+    const uuid =
+      rawUuid && !usedUuids.has(rawUuid) ? rawUuid : generateLobbyUuid(usedUuids)
+    usedUuids.add(uuid)
+
+    const nickname =
+      rawNick && !usedNicknames.has(rawNick)
+        ? rawNick
+        : generateLobbyNickname(usedNicknames)
+    usedNicknames.add(nickname)
+
+    result.push({ uuid, nickname })
+  }
+  return result
+}
+
+/**
+ * 读取并确保本机拥有至少 count 个不重复的大厅用户账号（第 1 个账号与单用户 jumpl.lobbyUser 同步）
+ */
+export function ensureLocalLobbyUsers(count = MAX_MULTI_TAB_COUNT): LobbyUserAccount[] {
+  const primary = ensureLocalLobbyUser()
+  const saved = readRawLocalUsers()
+  if (saved.length === 0) {
+    saved.push({ uuid: primary.uuid, nickname: primary.nickname })
+  } else {
+    saved[0] = {
+      uuid: nonempty(saved[0]?.uuid) || primary.uuid,
+      nickname: nonempty(saved[0]?.nickname) || primary.nickname,
+    }
+  }
+  const normalized = deduplicateLobbyAccounts(saved, Math.max(count, MAX_MULTI_TAB_COUNT))
+  writeRawLocalUsers(normalized)
+  return normalized
+}
+
+/**
+ * 重新随机指定索引账号的 uuid 或 nickname（确保与其他账号均不重复）
+ */
+export function regenerateAccountField(
+  accounts: LobbyUserAccount[],
+  index: number,
+  field: 'uuid' | 'nickname',
+): LobbyUserAccount[] {
+  const next = accounts.map((a) => ({ ...a }))
+  while (next.length <= index) {
+    next.push({ uuid: '', nickname: '' })
+  }
+  if (field === 'uuid') {
+    const used = new Set(next.map((a, idx) => (idx === index ? '' : a.uuid)).filter(Boolean))
+    next[index]!.uuid = generateLobbyUuid(used)
+  } else {
+    const used = new Set(next.map((a, idx) => (idx === index ? '' : a.nickname)).filter(Boolean))
+    next[index]!.nickname = generateLobbyNickname(used)
+  }
+  writeRawLocalUsers(next)
+  if (index === 0 && next[0]) {
+    writeLocalLobbyUser(next[0])
+  }
+  return next
+}
+
+/**
+ * 一键重新随机生成全部 count 个互不重复的账号
+ */
+export function regenerateAllAccounts(count = MAX_MULTI_TAB_COUNT): LobbyUserAccount[] {
+  const fresh = deduplicateLobbyAccounts([], Math.max(count, MAX_MULTI_TAB_COUNT))
+  writeRawLocalUsers(fresh)
+  if (fresh[0]) {
+    writeLocalLobbyUser(fresh[0])
+  }
+  return fresh
+}
+
 /** 写入 JUMP_LOBBY / 导出时去掉本机身份，避免串到其他设备 */
 export function lobbyForSharedStore(lobby: LobbyConfig): LobbyConfig {
-  return { ...lobby, uuid: '', nickname: '' }
+  const copy: LobbyConfig = {
+    ...lobby,
+    uuid: '',
+    nickname: '',
+    multiTabCount: clampMultiTabCount(lobby.multiTabCount),
+  }
+  delete copy.accounts
+  return copy
 }
 
 /** 与 deploy_lobby defaultConfig 对齐的默认大厅参数 */
 export function createDefaultLobbyConfig(): LobbyConfig {
   const user = ensureLocalLobbyUser()
+  const accounts = ensureLocalLobbyUsers(MAX_MULTI_TAB_COUNT)
   return {
     api_protocol: 'https',
     redirect_protocol: 'http',
@@ -111,6 +265,8 @@ export function createDefaultLobbyConfig(): LobbyConfig {
     path: '/api/v1/game/login',
     uuid: user.uuid,
     nickname: user.nickname,
+    multiTabCount: DEFAULT_MULTI_TAB_COUNT,
+    accounts,
     session: 'TEST',
     channel_id: 1,
     merchant_id: 1,
@@ -184,6 +340,7 @@ export function parseLobbyConfig(raw: unknown): LobbyConfig {
   const obj = raw as Record<string, unknown>
   const base = createDefaultLobbyConfig()
   const user = ensureLocalLobbyUser()
+  const accounts = ensureLocalLobbyUsers(MAX_MULTI_TAB_COUNT)
   const api =
     obj.api_protocol === 'http' || obj.api_protocol === 'https'
       ? obj.api_protocol
@@ -201,6 +358,8 @@ export function parseLobbyConfig(raw: unknown): LobbyConfig {
     path: typeof obj.path === 'string' ? obj.path : base.path,
     uuid: user.uuid,
     nickname: user.nickname,
+    multiTabCount: clampMultiTabCount(obj.multiTabCount),
+    accounts,
     session: typeof obj.session === 'string' ? obj.session : base.session,
     channel_id:
       typeof obj.channel_id === 'number' && Number.isFinite(obj.channel_id)
@@ -219,6 +378,65 @@ export function parseLobbyConfig(raw: unknown): LobbyConfig {
         ? obj.game_redirect
         : base.game_redirect,
   }
+}
+
+export type WindowGridRect = {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+/**
+ * 针对 Chrome / Edge 计算 N 个独立窗口在屏幕可用工作区上的均匀网格排列坐标
+ * - N=2: 1行 × 2列（左右对半分屏）
+ * - N=3: 1行 × 3列（左中右三等分）
+ * - N=4: 2行 × 2列（田字格四等分）
+ * - N=5..6: 2行 × 3列
+ * - N=7..9: 3行 × 3列
+ * - N=10..12: 3行 × 4列
+ */
+export function computeChromeGridRects(count: number): WindowGridRect[] {
+  const total = clampMultiTabCount(count)
+  const scr = (typeof window !== 'undefined' ? window.screen : undefined) as
+    | (Screen & { availLeft?: number; availTop?: number })
+    | undefined
+  const availLeft = typeof scr?.availLeft === 'number' ? scr.availLeft : 0
+  const availTop = typeof scr?.availTop === 'number' ? scr.availTop : 0
+  const availWidth = Math.max(800, scr?.availWidth || scr?.width || 1440)
+  const availHeight = Math.max(600, scr?.availHeight || scr?.height || 900)
+
+  let cols = 2
+  let rows = 1
+  if (total <= 1) {
+    cols = 1
+    rows = 1
+  } else if (total === 2) {
+    cols = 2
+    rows = 1
+  } else if (total === 3) {
+    cols = 3
+    rows = 1
+  } else {
+    cols = Math.ceil(Math.sqrt(total))
+    rows = Math.ceil(total / cols)
+  }
+
+  const cellW = Math.max(220, Math.floor(availWidth / cols))
+  const cellH = Math.max(220, Math.floor(availHeight / rows))
+
+  const rects: WindowGridRect[] = []
+  for (let i = 0; i < total; i += 1) {
+    const r = Math.floor(i / cols)
+    const c = i % cols
+    rects.push({
+      left: Math.round(availLeft + c * cellW),
+      top: Math.round(availTop + r * cellH),
+      width: cellW,
+      height: cellH,
+    })
+  }
+  return rects
 }
 
 export type LobbyJumpResult = {

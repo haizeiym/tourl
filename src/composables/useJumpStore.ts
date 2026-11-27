@@ -1,6 +1,6 @@
 import { computed, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { JumpConfigFile, JumpItem, LobbyConfig } from '../types/jump'
+import type { JumpConfigFile, JumpItem, LobbyConfig, LobbyUserAccount } from '../types/jump'
 import {
   ConfigConflictError,
   backupGlobalStores,
@@ -22,41 +22,121 @@ import {
   parseJumpConfig,
 } from '../utils/jump'
 import {
+  MAX_MULTI_TAB_COUNT,
+  type WindowGridRect,
+  clampMultiTabCount,
+  computeChromeGridRects,
   createDefaultLobbyConfig,
   createLobbyJumpItem,
-  executeLobbyJump,
+  deduplicateLobbyAccounts,
   ensureLocalLobbyUser,
+  ensureLocalLobbyUsers,
+  executeLobbyJump,
   lobbyForSharedStore,
   parseLobbyConfig,
+  regenerateAccountField,
+  regenerateAllAccounts,
   writeLocalLobbyUser,
+  writeRawLocalUsers,
 } from '../utils/lobby'
 
 function readInitialPreviewUrl(): string | null {
   if (typeof window === 'undefined') return null
   try {
-    const raw = new URLSearchParams(window.location.search).get('preview')?.trim() ?? ''
-    return isHttpUrl(raw) ? raw : null
+    const sp = new URLSearchParams(window.location.search)
+    const raw = sp.get('preview')?.trim() ?? ''
+    if (!isHttpUrl(raw)) return null
+    const wx = Number(sp.get('wx'))
+    const wy = Number(sp.get('wy'))
+    const ww = Number(sp.get('ww'))
+    const wh = Number(sp.get('wh'))
+    if (Number.isFinite(ww) && Number.isFinite(wh) && ww >= 200 && wh >= 200) {
+      try {
+        window.resizeTo(Math.round(ww), Math.round(wh))
+      } catch {
+        /* ignore */
+      }
+    }
+    if (Number.isFinite(wx) && Number.isFinite(wy)) {
+      try {
+        window.moveTo(Math.round(wx), Math.round(wy))
+      } catch {
+        /* ignore */
+      }
+    }
+    return raw
   } catch {
     return null
   }
 }
 
-export function buildPreviewTabUrl(targetUrl: string): string {
+export function buildPreviewTabUrl(targetUrl: string, rect?: WindowGridRect): string {
   const u = new URL(window.location.href)
   u.search = ''
   u.hash = ''
   u.searchParams.set('preview', targetUrl)
+  if (rect) {
+    u.searchParams.set('wx', String(rect.left))
+    u.searchParams.set('wy', String(rect.top))
+    u.searchParams.set('ww', String(rect.width))
+    u.searchParams.set('wh', String(rect.height))
+  }
+  return u.toString()
+}
+
+export type MultiGridPane = {
+  uuid: string
+  nickname: string
+  url: string
+}
+
+const LS_MULTI_GRID_PREFIX = 'jumpl.multiGrid.'
+
+function readInitialMultiGridPanes(): MultiGridPane[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const key = new URLSearchParams(window.location.search).get('multiGrid')?.trim() ?? ''
+    if (!key) return []
+    const raw = localStorage.getItem(`${LS_MULTI_GRID_PREFIX}${key}`)
+    if (!raw) return []
+    const arr = JSON.parse(raw) as unknown
+    if (!Array.isArray(arr)) return []
+    return arr.filter(
+      (p): p is MultiGridPane =>
+        Boolean(p) &&
+        typeof p === 'object' &&
+        typeof (p as MultiGridPane).url === 'string' &&
+        isHttpUrl((p as MultiGridPane).url),
+    )
+  } catch {
+    return []
+  }
+}
+
+export function buildMultiGridTabUrl(panes: MultiGridPane[]): string {
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+  try {
+    localStorage.setItem(`${LS_MULTI_GRID_PREFIX}${stamp}`, JSON.stringify(panes))
+  } catch {
+    /* ignore */
+  }
+  const u = new URL(window.location.href)
+  u.search = ''
+  u.hash = ''
+  u.searchParams.set('multiGrid', stamp)
   return u.toString()
 }
 
 export function useJumpStore() {
   const initialPreview = readInitialPreviewUrl()
+  const initialMultiGrid = readInitialMultiGridPanes()
   const config = ref<JumpConfigFile>(createEmptyConfig())
   const selectedId = ref<string | null>(null)
   const dirty = ref(false)
   const lobbyDirty = ref(false)
   const iframeSrc = ref<string | null>(initialPreview)
-  const isStandaloneTab = ref(Boolean(initialPreview))
+  const multiGridPanes = ref<MultiGridPane[]>(initialMultiGrid)
+  const isStandaloneTab = ref(Boolean(initialPreview || initialMultiGrid.length > 0))
   const focusNameToken = ref(0)
   const loading = ref(false)
   const saving = ref(false)
@@ -78,6 +158,7 @@ export function useJumpStore() {
   })
 
   const isIframePreview = computed(() => iframeSrc.value !== null)
+  const isMultiGridPreview = computed(() => multiGridPanes.value.length > 0)
 
   function markDirty() {
     dirty.value = true
@@ -89,8 +170,13 @@ export function useJumpStore() {
 
   function applyLocalUserToAllLobbies() {
     const user = ensureLocalLobbyUser()
+    const accounts = ensureLocalLobbyUsers(MAX_MULTI_TAB_COUNT)
     for (const id of Object.keys(lobbyById)) {
-      lobbyById[id] = { ...lobbyById[id]!, ...user }
+      lobbyById[id] = {
+        ...lobbyById[id]!,
+        ...user,
+        accounts: accounts.map((a) => ({ ...a })),
+      }
     }
   }
 
@@ -465,15 +551,113 @@ export function useJumpStore() {
   function updateSelectedLobby(patch: Partial<LobbyConfig>) {
     const item = selectedItem.value
     if (!item || item.kind !== 'lobby') return
-    const { uuid, nickname, ...shared } = patch
+    const { uuid, nickname, accounts, ...shared } = patch
     if (uuid !== undefined || nickname !== undefined) {
-      writeLocalLobbyUser({ uuid, nickname })
+      const nextPrimary = writeLocalLobbyUser({ uuid, nickname })
+      const allAccounts = ensureLocalLobbyUsers(MAX_MULTI_TAB_COUNT)
+      allAccounts[0] = { uuid: nextPrimary.uuid, nickname: nextPrimary.nickname }
+      writeRawLocalUsers(allAccounts)
+      applyLocalUserToAllLobbies()
+    }
+    if (accounts !== undefined) {
+      writeRawLocalUsers(accounts)
+      if (accounts[0]) {
+        writeLocalLobbyUser(accounts[0])
+      }
       applyLocalUserToAllLobbies()
     }
     if (Object.keys(shared).length === 0) return
     const current = lobbyById[item.id] ?? createDefaultLobbyConfig()
-    lobbyById[item.id] = { ...current, ...shared, ...ensureLocalLobbyUser() }
+    if (shared.multiTabCount !== undefined) {
+      shared.multiTabCount = clampMultiTabCount(shared.multiTabCount)
+    }
+    lobbyById[item.id] = {
+      ...current,
+      ...shared,
+      ...ensureLocalLobbyUser(),
+      accounts: ensureLocalLobbyUsers(MAX_MULTI_TAB_COUNT),
+    }
     markLobbyDirty()
+  }
+
+  function updateLobbyAccount(index: number, patch: Partial<LobbyUserAccount>) {
+    const item = selectedItem.value
+    if (!item || item.kind !== 'lobby') return
+    const current = lobbyById[item.id] ?? createDefaultLobbyConfig()
+    const list = (current.accounts ?? ensureLocalLobbyUsers(MAX_MULTI_TAB_COUNT)).map((a) => ({ ...a }))
+    while (list.length <= index) {
+      list.push({ uuid: '', nickname: '' })
+    }
+    list[index] = {
+      uuid: patch.uuid !== undefined ? patch.uuid : list[index]!.uuid,
+      nickname: patch.nickname !== undefined ? patch.nickname : list[index]!.nickname,
+    }
+    writeRawLocalUsers(list)
+    if (index === 0 && list[0]) {
+      writeLocalLobbyUser(list[0])
+    }
+    for (const id of Object.keys(lobbyById)) {
+      lobbyById[id] = {
+        ...lobbyById[id]!,
+        uuid: list[0]?.uuid || lobbyById[id]!.uuid,
+        nickname: list[0]?.nickname || lobbyById[id]!.nickname,
+        accounts: list.map((a) => ({ ...a })),
+      }
+    }
+  }
+
+  function regenerateLobbyAccountField(index: number, field: 'uuid' | 'nickname') {
+    const item = selectedItem.value
+    if (!item || item.kind !== 'lobby') return
+    const current = lobbyById[item.id] ?? createDefaultLobbyConfig()
+    const list = current.accounts ?? ensureLocalLobbyUsers(MAX_MULTI_TAB_COUNT)
+    const next = regenerateAccountField(list, index, field)
+    for (const id of Object.keys(lobbyById)) {
+      lobbyById[id] = {
+        ...lobbyById[id]!,
+        uuid: next[0]?.uuid || lobbyById[id]!.uuid,
+        nickname: next[0]?.nickname || lobbyById[id]!.nickname,
+        accounts: next.map((a) => ({ ...a })),
+      }
+    }
+  }
+
+  function regenerateAllLobbyAccounts() {
+    const item = selectedItem.value
+    if (!item || item.kind !== 'lobby') return
+    const current = lobbyById[item.id] ?? createDefaultLobbyConfig()
+    const count = clampMultiTabCount(current.multiTabCount)
+    const next = regenerateAllAccounts(Math.max(count, MAX_MULTI_TAB_COUNT))
+    for (const id of Object.keys(lobbyById)) {
+      lobbyById[id] = {
+        ...lobbyById[id]!,
+        uuid: next[0]?.uuid || lobbyById[id]!.uuid,
+        nickname: next[0]?.nickname || lobbyById[id]!.nickname,
+        accounts: next.map((a) => ({ ...a })),
+      }
+    }
+    ElMessage.success(`已重新随机生成 ${count} 个互不重复的账号`)
+  }
+
+  function deduplicateSelectedLobbyAccounts() {
+    const item = selectedItem.value
+    if (!item || item.kind !== 'lobby') return
+    const current = lobbyById[item.id] ?? createDefaultLobbyConfig()
+    const count = clampMultiTabCount(current.multiTabCount)
+    const next = deduplicateLobbyAccounts(current.accounts ?? [], Math.max(count, MAX_MULTI_TAB_COUNT))
+    writeRawLocalUsers(next)
+    if (next[0]) {
+      writeLocalLobbyUser(next[0])
+    }
+    for (const id of Object.keys(lobbyById)) {
+      lobbyById[id] = {
+        ...lobbyById[id]!,
+        uuid: next[0]?.uuid || lobbyById[id]!.uuid,
+        nickname: next[0]?.nickname || lobbyById[id]!.nickname,
+        accounts: next.map((a) => ({ ...a })),
+      }
+    }
+    ElMessage.success('已自动去重所有账号 UUID 与昵称')
   }
 
   function resetSelectedLobby() {
@@ -506,6 +690,8 @@ export function useJumpStore() {
           ...srcLobby,
           uuid: srcLobby.uuid,
           nickname: srcLobby.nickname,
+          multiTabCount: srcLobby.multiTabCount,
+          accounts: srcLobby.accounts?.map((a) => ({ ...a })),
         }
       }
       const index = config.value.items.findIndex((i) => i.id === source.id)
@@ -570,6 +756,23 @@ export function useJumpStore() {
     iframeSrc.value = null
   }
 
+  function closeMultiGrid() {
+    multiGridPanes.value = []
+    if (isStandaloneTab.value) {
+      isStandaloneTab.value = false
+      try {
+        window.history.replaceState(null, '', window.location.pathname)
+      } catch {
+        /* ignore */
+      }
+      try {
+        window.close()
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
   /**
    * 同步打开新标签页（必须在用户点击的同步调用栈内执行，否则 iOS Safari 会拦截）。
    * 注意：features 中带 noopener 时 window.open 恒返回 null，因此改为手动断开 opener。
@@ -586,12 +789,159 @@ export function useJumpStore() {
     return win
   }
 
+  /**
+   * 针对 Chrome / Edge 同步打开带均匀网格坐标的独立标签窗口
+   */
+  function openTiledChromeWindow(
+    slotIndex: number,
+    rect: WindowGridRect,
+    account: LobbyUserAccount,
+  ): Window | null {
+    const features = [
+      'popup=yes',
+      `left=${rect.left}`,
+      `top=${rect.top}`,
+      `width=${rect.width}`,
+      `height=${rect.height}`,
+      'resizable=yes',
+      'scrollbars=yes',
+    ].join(',')
+
+    const win = window.open('about:blank', `jumpl_lobby_slot_${slotIndex}`, features)
+    if (!win) return null
+
+    try {
+      win.resizeTo(rect.width, rect.height)
+      win.moveTo(rect.left, rect.top)
+    } catch {
+      /* ignore */
+    }
+
+    try {
+      win.document.open()
+      win.document.write(
+        `<!doctype html><html><head><meta charset="utf-8"><title>账号 #${slotIndex + 1} - ${account.nickname}</title></head>` +
+          `<body style="margin:0;height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0f172a;color:#e2e8f0;font-family:system-ui,sans-serif;font-size:13px;">` +
+          `<div style="margin-bottom:8px;font-weight:600;color:#38bdf8;">窗口 #${slotIndex + 1} (${rect.width}×${rect.height})</div>` +
+          `<div>正在创建并登录账号：<b>${account.nickname}</b> (UUID: <code>${account.uuid}</code>)...</div>` +
+          `</body></html>`,
+      )
+      win.document.close()
+    } catch {
+      /* ignore */
+    }
+
+    return win
+  }
+
   async function jumpSelected() {
     const item = selectedItem.value
     if (!item) return
 
     if (item.kind === 'lobby') {
       const lobby = lobbyById[item.id] ?? createDefaultLobbyConfig()
+
+      // 多标签打开模式（Chrome / Edge 多账号并发创建 + 窗口均匀排列）
+      if (item.openMode === 'multi-tab') {
+        const count = clampMultiTabCount(lobby.multiTabCount)
+        const dedupedAll = deduplicateLobbyAccounts(
+          lobby.accounts ?? ensureLocalLobbyUsers(MAX_MULTI_TAB_COUNT),
+          Math.max(count, MAX_MULTI_TAB_COUNT),
+        )
+        writeRawLocalUsers(dedupedAll)
+        if (dedupedAll[0]) writeLocalLobbyUser(dedupedAll[0])
+        applyLocalUserToAllLobbies()
+
+        const activeAccounts = dedupedAll.slice(0, count)
+        const rects = computeChromeGridRects(count)
+
+        // 在用户点击的同步调用栈内一次性尝试打开 N 个均匀排布的 Chrome/Edge 独立窗口
+        const preWins = activeAccounts.map((acc, idx) =>
+          openTiledChromeWindow(idx, rects[idx]!, acc),
+        )
+        const openedCount = preWins.filter((w) => w !== null).length
+        const allPopupsOpened = openedCount === count
+
+        jumping.value = true
+        try {
+          // 并发创建并登录全部 N 个互不重复的账号
+          const results = await Promise.all(
+            activeAccounts.map(async (acc) => {
+              const { finalUrl } = await executeLobbyJump({
+                ...lobby,
+                uuid: acc.uuid,
+                nickname: acc.nickname,
+              })
+              return {
+                uuid: acc.uuid,
+                nickname: acc.nickname,
+                url: finalUrl,
+              }
+            }),
+          )
+
+          if (allPopupsOpened) {
+            // 模式 1：Chrome/Edge 允许弹出全部独立窗口，分别导航到各自均匀排布的独立窗口
+            results.forEach((pane, idx) => {
+              const win = preWins[idx]
+              const rect = rects[idx]!
+              if (!win || win.closed) return
+              win.location.href = buildPreviewTabUrl(pane.url, rect)
+              try {
+                win.resizeTo(rect.width, rect.height)
+                win.moveTo(rect.left, rect.top)
+              } catch {
+                /* ignore */
+              }
+            })
+            ElMessage.success(`已创建并打开 ${count} 个不重复账号，独立窗口已均匀排列`)
+            return
+          }
+
+          // 模式 2：Chrome/Edge 默认拦截了第 2 个及以后的弹窗 → 自动切换为同窗均匀多宫格排列（100% 全部打开）
+          for (let i = 1; i < preWins.length; i += 1) {
+            try {
+              preWins[i]?.close()
+            } catch {
+              /* ignore */
+            }
+          }
+          const primaryWin = preWins[0]
+          if (primaryWin && !primaryWin.closed) {
+            const scr = window.screen as Screen & { availLeft?: number; availTop?: number }
+            const availLeft = typeof scr.availLeft === 'number' ? scr.availLeft : 0
+            const availTop = typeof scr.availTop === 'number' ? scr.availTop : 0
+            const availW = scr.availWidth || scr.width || 1440
+            const availH = scr.availHeight || scr.height || 900
+            try {
+              primaryWin.moveTo(availLeft, availTop)
+              primaryWin.resizeTo(availW, availH)
+            } catch {
+              /* ignore */
+            }
+            primaryWin.location.href = buildMultiGridTabUrl(results)
+          } else {
+            multiGridPanes.value = results
+          }
+          ElMessage.success(
+            `已创建并打开 ${results.length} 个不重复账号并按网格均匀排列（若需独立系统窗口，可在顶部点「拆分为独立多窗口」）`,
+          )
+        } catch (err) {
+          console.error('[jumpSelected] multi-tab', err)
+          preWins.forEach((w) => {
+            try {
+              w?.close()
+            } catch {
+              /* ignore */
+            }
+          })
+          ElMessage.error(err instanceof Error ? err.message : '多标签大厅跳转失败')
+        } finally {
+          jumping.value = false
+        }
+        return
+      }
+
       // 新标签模式：在 await 之前先同步打开空白页，拿到地址后再导航到包装预览页，避免 Safari 拦截
       const preWin = item.openMode === 'iframe' ? null : openBlankTab()
       if (item.openMode !== 'iframe' && !preWin) {
@@ -658,8 +1008,10 @@ export function useJumpStore() {
     dirty,
     lobbyDirty,
     iframeSrc,
+    multiGridPanes,
     isStandaloneTab,
     isIframePreview,
+    isMultiGridPreview,
     focusNameToken,
     loading,
     saving,
@@ -682,12 +1034,17 @@ export function useJumpStore() {
     exportConfig,
     updateSelected,
     updateSelectedLobby,
+    updateLobbyAccount,
+    regenerateLobbyAccountField,
+    regenerateAllLobbyAccounts,
+    deduplicateSelectedLobbyAccounts,
     resetSelectedLobby,
     setArgs,
     duplicateSelected,
     deleteSelected,
     jumpSelected,
     closeIframe,
+    closeMultiGrid,
   }
 }
 

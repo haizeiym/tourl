@@ -98,7 +98,7 @@ export function displayInitial(name: string): string {
 }
 
 function isOpenMode(value: unknown): value is OpenMode {
-  return value === 'tab' || value === 'iframe'
+  return value === 'tab' || value === 'iframe' || value === 'multi-tab'
 }
 
 function isJumpKind(value: unknown): value is JumpKind {

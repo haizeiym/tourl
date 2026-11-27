@@ -7,6 +7,7 @@ import TopBar from './components/TopBar.vue'
 import JumpGrid from './components/JumpGrid.vue'
 import InspectorPanel from './components/InspectorPanel.vue'
 import IframePreview from './components/IframePreview.vue'
+import MultiGridPreview from './components/MultiGridPreview.vue'
 
 const LS_WIDTH = 'jumpl.inspectorWidth'
 const DEFAULT_WIDTH = 320
@@ -111,7 +112,10 @@ watch(isMobile, () => {
   <div class="flex h-dvh flex-col bg-slate-100 text-slate-800">
     <TopBar :store="store" :layout="layout" :is-mobile="isMobile" />
     <div class="flex min-h-0 flex-1" :class="dragging ? 'select-none' : ''">
-      <template v-if="store.isIframePreview.value">
+      <template v-if="store.isMultiGridPreview.value">
+        <MultiGridPreview :store="store" />
+      </template>
+      <template v-else-if="store.isIframePreview.value">
         <IframePreview :store="store" :is-mobile="isMobile" />
       </template>
       <template v-else-if="isMobile">
